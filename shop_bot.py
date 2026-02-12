@@ -18,6 +18,7 @@ from aiogram.types import (
 
 # ==================== НАСТРОЙКИ ====================
 BOT_TOKEN = "8595769512:AAGt130PyN2rKm7fnmXRyBOWHKHeaNGEG8g"  
+ADMIN_ID = 439446887
 CHANNEL_ID = "@test_shop654"
 DELIVERY_COST = 300  # Стоимость доставки
 FREE_DELIVERY_THRESHOLD = 2000  # Бесплатная доставка от этой суммы
@@ -3522,4 +3523,5 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print("\n🛑 Бот остановлен")
     except Exception as e:
+
         print(f"❌ Ошибка: {e}")
