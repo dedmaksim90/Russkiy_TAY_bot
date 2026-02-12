@@ -16,8 +16,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton
 )
 
-# ==================== НАСТРОЙКИ ====================
-# BOT_TOKEN = "8595769512:AAGt130PyN2rKm7fnmXRyBOWHKHeaNGEG8g"  
+# ==================== НАСТРОЙКИ ==================== 
 BOT_TOKEN = os.getenv('BOT_TOKEN') 
 ADMIN_ID = 439446887
 CHANNEL_ID = "@test_shop654"
@@ -3526,4 +3525,5 @@ if __name__ == '__main__':
     except Exception as e:
 
         print(f"❌ Ошибка: {e}")
+
 
