@@ -17,7 +17,8 @@ from aiogram.types import (
 )
 
 # ==================== НАСТРОЙКИ ====================
-BOT_TOKEN = "8595769512:AAGt130PyN2rKm7fnmXRyBOWHKHeaNGEG8g"  
+# BOT_TOKEN = "8595769512:AAGt130PyN2rKm7fnmXRyBOWHKHeaNGEG8g"  
+BOT_TOKEN = os.getenv('BOT_TOKEN') 
 ADMIN_ID = 439446887
 CHANNEL_ID = "@test_shop654"
 DELIVERY_COST = 300  # Стоимость доставки
@@ -3525,3 +3526,4 @@ if __name__ == '__main__':
     except Exception as e:
 
         print(f"❌ Ошибка: {e}")
+
