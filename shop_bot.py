@@ -140,8 +140,11 @@ def anti_flood_handler(func):
     async def wrapper(*args, **kwargs):
         message_or_call = args[0]
         user_id = message_or_call.from_user.id
+        
+        # Админ без ограничений
         if user_id == ADMIN_ID:
             return await func(*args, **kwargs)
+        
         allow, error_message = await check_rate_limit(user_id)
         if not allow:
             if isinstance(message_or_call, types.Message):
@@ -149,6 +152,13 @@ def anti_flood_handler(func):
             else:
                 await message_or_call.answer(error_message, show_alert=True)
             return
+        
+        # Убираем state из kwargs, если функция его не принимает
+        import inspect
+        sig = inspect.signature(func)
+        if 'state' not in sig.parameters:
+            kwargs.pop('state', None)
+        
         return await func(*args, **kwargs)
     return wrapper
 
