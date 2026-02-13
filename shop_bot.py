@@ -134,27 +134,32 @@ def sanitize_log_data(user_id: int) -> str:
     hash_obj = hashlib.md5(f"{user_id}{salt}".encode())
     return f"user_{hash_obj.hexdigest()[:8]}"
 
-# ==================== ИСПРАВЛЕННЫЙ ДЕКОРАТОР ====================
-def anti_flood_handler(func):
-    """Декоратор ТОЛЬКО для функций БЕЗ state"""
-    async def wrapper(message_or_call, *args, **kwargs):
-        # Убираем state если он случайно передался
-        kwargs_copy = {k: v for k, v in kwargs.items() if k != 'state'}
-        
-        user_id = message_or_call.from_user.id
+# ==================== MIDDLEWARE ДЛЯ ЗАЩИТЫ ОТ ФЛУДА ====================
+class AntiFloodMiddleware:
+    """Middleware для защиты от флуда - работает с ЛЮБЫМИ хендлерами"""
+    async def on_pre_process_message(self, message: types.Message, data: dict):
+        user_id = message.from_user.id
         if user_id == ADMIN_ID:
-            return await func(message_or_call, *args, **kwargs_copy)
+            return
         
         allow, error_message = await check_rate_limit(user_id)
         if not allow:
-            if isinstance(message_or_call, types.Message):
-                await message_or_call.answer(error_message)
-            else:
-                await message_or_call.answer(error_message, show_alert=True)
+            await message.answer(error_message)
+            raise CancelHandler()  # Прерываем обработку
+    
+    async def on_pre_process_callback_query(self, call: types.CallbackQuery, data: dict):
+        user_id = call.from_user.id
+        if user_id == ADMIN_ID:
             return
         
-        return await func(message_or_call, *args, **kwargs_copy)
-    return wrapper
+        allow, error_message = await check_rate_limit(user_id)
+        if not allow:
+            await call.answer(error_message, show_alert=True)
+            raise CancelHandler()  # Прерываем обработку
+
+# Регистрируем middleware
+from aiogram.dispatcher.handler import CancelHandler
+dp.middleware.setup(AntiFloodMiddleware())
 
 # ==================== СТРУКТУРА КАТЕГОРИЙ ====================
 CATEGORIES = {
@@ -625,7 +630,6 @@ def get_random_thank_you_message() -> str:
 
 # ==================== ОСНОВНЫЕ КОМАНДЫ ====================
 @dp.message_handler(commands=['start'])
-@anti_flood_handler
 async def cmd_start(message: types.Message):
     if message.from_user.id == ADMIN_ID:
         await message.answer(
@@ -644,7 +648,6 @@ async def cmd_start(message: types.Message):
         )
 
 @dp.message_handler(text="🛍️ Начнем выбирать полезный продукт!")
-@anti_flood_handler
 async def start_shopping(message: types.Message):
     is_admin = (message.from_user.id == ADMIN_ID)
     await message.answer(
@@ -655,7 +658,6 @@ async def start_shopping(message: types.Message):
     )
 
 @dp.message_handler(text="🏠 В начало")
-@anti_flood_handler
 async def go_to_home(message: types.Message):
     await cmd_start(message)
 
@@ -683,7 +685,6 @@ async def switch_to_user_mode(message: types.Message):
     )
 
 @dp.message_handler(text="🛍️ Каталог")
-@anti_flood_handler
 async def show_catalog(message: types.Message):
     is_admin = (message.from_user.id == ADMIN_ID)
     await message.answer(
@@ -693,7 +694,6 @@ async def show_catalog(message: types.Message):
     )
 
 @dp.message_handler(lambda m: m.text in CATEGORIES.keys())
-@anti_flood_handler
 async def show_category(message: types.Message):
     category = CATEGORIES.get(message.text)
     if not category:
@@ -706,7 +706,6 @@ async def show_category(message: types.Message):
     )
 
 @dp.message_handler(lambda m: any(subcat in m.text for category in CATEGORIES.values() for subcat in category["subcategories"]))
-@anti_flood_handler
 async def show_products(message: types.Message):
     try:
         subcategory_text = message.text
@@ -746,7 +745,6 @@ async def show_products(message: types.Message):
 
 # ==================== КОРЗИНА ====================
 @dp.message_handler(text="🛒 Корзина")
-@anti_flood_handler
 async def show_cart(message: types.Message):
     user_id = str(message.from_user.id)
     cart = user_carts.get(user_id, [])
@@ -791,7 +789,6 @@ async def show_cart(message: types.Message):
     await message.answer(text, parse_mode="HTML", reply_markup=get_cart_keyboard(cart))
 
 @dp.callback_query_handler(lambda c: c.data.startswith('add_'))
-@anti_flood_handler
 async def add_to_cart(call: types.CallbackQuery):
     product_id = call.data.split('_')[1]
     product = products_db.get(product_id)
@@ -842,7 +839,6 @@ async def add_to_cart(call: types.CallbackQuery):
         print(f"Ошибка при обновлении клавиатуры: {e}")
 
 @dp.callback_query_handler(lambda c: c.data.startswith('manual_add_'))
-@anti_flood_handler
 async def manual_add_to_cart_start(call: types.CallbackQuery, state: FSMContext):
     product_id = call.data.split('_')[2]
     product = products_db.get(product_id)
@@ -875,7 +871,6 @@ async def manual_add_to_cart_start(call: types.CallbackQuery, state: FSMContext)
     )
 
 @dp.message_handler(state=ManualAddToCartState.quantity)
-@anti_flood_handler
 async def process_manual_add_quantity(message: types.Message, state: FSMContext):
     try:
         data = await state.get_data()
@@ -929,7 +924,6 @@ async def process_manual_add_quantity(message: types.Message, state: FSMContext)
         await state.finish()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('inc_'))
-@anti_flood_handler
 async def increase_quantity(call: types.CallbackQuery):
     product_id = call.data.split('_')[1]
     product = products_db.get(product_id)
@@ -957,7 +951,6 @@ async def increase_quantity(call: types.CallbackQuery):
         await call.answer("❌ Товар не найден в корзине", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data.startswith('dec_'))
-@anti_flood_handler
 async def decrease_quantity(call: types.CallbackQuery):
     product_id = call.data.split('_')[1]
     product = products_db.get(product_id)
@@ -1032,7 +1025,6 @@ async def update_cart_message(call: types.CallbackQuery, user_id: str):
         await call.message.answer(text, parse_mode="HTML", reply_markup=get_cart_keyboard(cart))
 
 @dp.callback_query_handler(lambda c: c.data == "clear_cart")
-@anti_flood_handler
 async def clear_cart_callback(call: types.CallbackQuery):
     user_id = str(call.from_user.id)
     user_carts[user_id] = []
@@ -1041,7 +1033,6 @@ async def clear_cart_callback(call: types.CallbackQuery):
     await call.message.answer("🛒 Корзина пуста")
 
 @dp.callback_query_handler(lambda c: c.data == "go_to_cart")
-@anti_flood_handler
 async def go_to_cart_callback(call: types.CallbackQuery):
     user_id = str(call.from_user.id)
     cart = user_carts.get(user_id, [])
@@ -1053,7 +1044,6 @@ async def go_to_cart_callback(call: types.CallbackQuery):
 
 # ==================== ОФОРМЛЕНИЕ ЗАКАЗА ====================
 @dp.callback_query_handler(lambda c: c.data == "checkout")
-@anti_flood_handler
 async def start_checkout(call: types.CallbackQuery, state: FSMContext):
     user_id = str(call.from_user.id)
     cart = user_carts.get(user_id, [])
@@ -1076,7 +1066,6 @@ async def start_checkout(call: types.CallbackQuery, state: FSMContext):
     )
 
 @dp.callback_query_handler(lambda c: c.data in ["pickup", "delivery"], state=CheckoutState.delivery_method)
-@anti_flood_handler
 async def process_delivery_method(call: types.CallbackQuery, state: FSMContext):
     delivery_method = call.data
     async with state.proxy() as data:
@@ -1088,7 +1077,6 @@ async def process_delivery_method(call: types.CallbackQuery, state: FSMContext):
         await create_order(call, state, PICKUP_ADDRESS)
 
 @dp.message_handler(state=CheckoutState.address)
-@anti_flood_handler
 async def process_address(message: types.Message, state: FSMContext):
     is_valid, address, error_msg = validate_address(message.text)
     if not is_valid:
@@ -1230,7 +1218,6 @@ async def create_order(message_or_call, state: FSMContext, address: str):
 
 # ==================== АДМИН ФУНКЦИИ ====================
 @dp.message_handler(text="📦 Мои заказы")
-@anti_flood_handler
 async def show_user_orders(message: types.Message):
     user_id = str(message.from_user.id)
     user_orders = [order for order in orders_db.values() if order.get('user_id') == user_id]
@@ -1261,7 +1248,6 @@ async def show_user_orders(message: types.Message):
     await message.answer(orders_text, parse_mode="HTML", reply_markup=get_main_keyboard(is_admin=(message.from_user.id == ADMIN_ID)))
 
 @dp.message_handler(text="ℹ️ О нас")
-@anti_flood_handler
 async def show_about(message: types.Message):
     about_text = (
         "🏡 <b>Русский ТАЙ - Семейная ферма</b>\n\n"
@@ -2293,7 +2279,6 @@ def update_user_stats(user_id: str, order_data: dict, status_change: str = None)
     save_data()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('notify_'))
-@anti_flood_handler
 async def notify_product(call: types.CallbackQuery):
     product_id = call.data.split('_')[1]
     product = products_db.get(product_id)
@@ -2390,7 +2375,6 @@ async def schedule_daily_cleanup():
 
 # ==================== ОБРАБОТКА КНОПОК ИЗ КАНАЛА ====================
 @dp.callback_query_handler(lambda c: c.data.startswith('channel_order_'))
-@anti_flood_handler
 async def process_channel_order(call: types.CallbackQuery):
     product_id = call.data.split('_')[-1]
     product = products_db.get(product_id)
@@ -2451,19 +2435,16 @@ async def no_active_orders_callback(call: types.CallbackQuery):
     await call.answer("📭 Нет активных заказов", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == "go_home")
-@anti_flood_handler
 async def go_home_callback(call: types.CallbackQuery):
     await call.message.edit_reply_markup(None)
     await cmd_start(call.message)
 
 @dp.callback_query_handler(lambda c: c.data == "view_categories")
-@anti_flood_handler
 async def callback_view_categories(call: types.CallbackQuery):
     await call.message.edit_reply_markup(None)
     await show_catalog(call.message)
 
 @dp.callback_query_handler(lambda c: c.data == "go_to_cart")
-@anti_flood_handler
 async def go_to_cart_callback(call: types.CallbackQuery):
     user_id = str(call.from_user.id)
     cart = user_carts.get(user_id, [])
@@ -2546,4 +2527,5 @@ if __name__ == '__main__':
         print("\n🛑 Бот остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
+
 
