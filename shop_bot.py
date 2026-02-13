@@ -136,12 +136,11 @@ def sanitize_log_data(user_id: int) -> str:
 
 # ==================== ИСПРАВЛЕННЫЙ ДЕКОРАТОР ====================
 def anti_flood_handler(func):
-    """Декоратор для защиты от флуда - принимает любые аргументы"""
+    """Универсальный декоратор - работает и с state, и без state"""
     async def wrapper(*args, **kwargs):
         message_or_call = args[0]
         user_id = message_or_call.from_user.id
         
-        # Админ без ограничений
         if user_id == ADMIN_ID:
             return await func(*args, **kwargs)
         
@@ -153,13 +152,16 @@ def anti_flood_handler(func):
                 await message_or_call.answer(error_message, show_alert=True)
             return
         
-        # Убираем state из kwargs, если функция его не принимает
-        import inspect
-        sig = inspect.signature(func)
-        if 'state' not in sig.parameters:
-            kwargs.pop('state', None)
-        
-        return await func(*args, **kwargs)
+        # Безопасно вызываем функцию, не передавая лишних аргументов
+        try:
+            return await func(*args, **kwargs)
+        except TypeError as e:
+            if "unexpected keyword argument 'state'" in str(e):
+                # Убираем state из kwargs и пробуем снова
+                kwargs.pop('state', None)
+                return await func(*args, **kwargs)
+            else:
+                raise e
     return wrapper
 
 # ==================== СТРУКТУРА КАТЕГОРИЙ ====================
@@ -2361,7 +2363,6 @@ async def auto_delete_old_orders(days: int = 30):
                         pass
         
         for order_id in orders_to_delete:
-            # Полностью удаляем заказ со всеми персональными данными
             del orders_db[order_id]
         
         if deleted_count > 0:
@@ -2449,7 +2450,6 @@ async def process_channel_order(call: types.CallbackQuery):
         print(f"Ошибка при отправке сообщения пользователю: {e}")
         await call.answer("✅ Товар добавлен! Перейдите в бота для оформления заказа.", show_alert=True)
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ CALLBACK-ХЕНДЛЕРЫ ====================
 @dp.callback_query_handler(lambda c: c.data == "no_products")
 async def no_products_callback(call: types.CallbackQuery):
     await call.answer("📭 В хозяйстве пока нет товаров", show_alert=True)
@@ -2469,6 +2469,17 @@ async def go_home_callback(call: types.CallbackQuery):
 async def callback_view_categories(call: types.CallbackQuery):
     await call.message.edit_reply_markup(None)
     await show_catalog(call.message)
+
+@dp.callback_query_handler(lambda c: c.data == "go_to_cart")
+@anti_flood_handler
+async def go_to_cart_callback(call: types.CallbackQuery):
+    user_id = str(call.from_user.id)
+    cart = user_carts.get(user_id, [])
+    if not cart:
+        await call.answer("🛒 Ваша корзина пуста.", show_alert=True)
+        return
+    await show_cart(call.message)
+    await call.answer()
 
 @dp.callback_query_handler(lambda c: c.data == "admin_panel")
 async def admin_panel_callback(call: types.CallbackQuery):
