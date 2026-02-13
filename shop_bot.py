@@ -134,33 +134,6 @@ def sanitize_log_data(user_id: int) -> str:
     hash_obj = hashlib.md5(f"{user_id}{salt}".encode())
     return f"user_{hash_obj.hexdigest()[:8]}"
 
-# ==================== MIDDLEWARE ДЛЯ ЗАЩИТЫ ОТ ФЛУДА ====================
-class AntiFloodMiddleware:
-    """Middleware для защиты от флуда - работает с ЛЮБЫМИ хендлерами"""
-    async def on_pre_process_message(self, message: types.Message, data: dict):
-        user_id = message.from_user.id
-        if user_id == ADMIN_ID:
-            return
-        
-        allow, error_message = await check_rate_limit(user_id)
-        if not allow:
-            await message.answer(error_message)
-            raise CancelHandler()  # Прерываем обработку
-    
-    async def on_pre_process_callback_query(self, call: types.CallbackQuery, data: dict):
-        user_id = call.from_user.id
-        if user_id == ADMIN_ID:
-            return
-        
-        allow, error_message = await check_rate_limit(user_id)
-        if not allow:
-            await call.answer(error_message, show_alert=True)
-            raise CancelHandler()  # Прерываем обработку
-
-# Регистрируем middleware
-from aiogram.dispatcher.handler import CancelHandler
-dp.middleware.setup(AntiFloodMiddleware())
-
 # ==================== СТРУКТУРА КАТЕГОРИЙ ====================
 CATEGORIES = {
     "🥚 Яйцо": {
@@ -237,6 +210,29 @@ bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(bot, storage=storage)
 logging.basicConfig(level=logging.INFO)
+
+# ==================== MIDDLEWARE ДЛЯ ЗАЩИТЫ ОТ ФЛУДА ====================
+class AntiFloodMiddleware:
+    async def on_pre_process_message(self, message: types.Message, data: dict):
+        user_id = message.from_user.id
+        if user_id == ADMIN_ID:
+            return
+        allow, error_message = await check_rate_limit(user_id)
+        if not allow:
+            await message.answer(error_message)
+            raise CancelHandler()
+    
+    async def on_pre_process_callback_query(self, call: types.CallbackQuery, data: dict):
+        user_id = call.from_user.id
+        if user_id == ADMIN_ID:
+            return
+        allow, error_message = await check_rate_limit(user_id)
+        if not allow:
+            await call.answer(error_message, show_alert=True)
+            raise CancelHandler()
+
+from aiogram.dispatcher.handler import CancelHandler
+dp.middleware.setup(AntiFloodMiddleware())
 
 # ==================== СОСТОЯНИЯ ====================
 class AddProduct(StatesGroup):
@@ -2527,5 +2523,6 @@ if __name__ == '__main__':
         print("\n🛑 Бот остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
+
 
 
