@@ -136,13 +136,14 @@ def sanitize_log_data(user_id: int) -> str:
 
 # ==================== ИСПРАВЛЕННЫЙ ДЕКОРАТОР ====================
 def anti_flood_handler(func):
-    """Универсальный декоратор - работает и с state, и без state"""
-    async def wrapper(*args, **kwargs):
-        message_or_call = args[0]
-        user_id = message_or_call.from_user.id
+    """Декоратор ТОЛЬКО для функций БЕЗ state"""
+    async def wrapper(message_or_call, *args, **kwargs):
+        # Убираем state если он случайно передался
+        kwargs_copy = {k: v for k, v in kwargs.items() if k != 'state'}
         
+        user_id = message_or_call.from_user.id
         if user_id == ADMIN_ID:
-            return await func(*args, **kwargs)
+            return await func(message_or_call, *args, **kwargs_copy)
         
         allow, error_message = await check_rate_limit(user_id)
         if not allow:
@@ -152,16 +153,7 @@ def anti_flood_handler(func):
                 await message_or_call.answer(error_message, show_alert=True)
             return
         
-        # Безопасно вызываем функцию, не передавая лишних аргументов
-        try:
-            return await func(*args, **kwargs)
-        except TypeError as e:
-            if "unexpected keyword argument 'state'" in str(e):
-                # Убираем state из kwargs и пробуем снова
-                kwargs.pop('state', None)
-                return await func(*args, **kwargs)
-            else:
-                raise e
+        return await func(message_or_call, *args, **kwargs_copy)
     return wrapper
 
 # ==================== СТРУКТУРА КАТЕГОРИЙ ====================
@@ -2554,3 +2546,4 @@ if __name__ == '__main__':
         print("\n🛑 Бот остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
+
