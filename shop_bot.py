@@ -212,11 +212,20 @@ dp = Dispatcher(bot, storage=storage)
 logging.basicConfig(level=logging.INFO)
 
 # ==================== MIDDLEWARE ДЛЯ ЗАЩИТЫ ОТ ФЛУДА ====================
-class AntiFloodMiddleware:
+from aiogram.dispatcher.middlewares import BaseMiddleware
+from aiogram.dispatcher.handler import CancelHandler
+
+class AntiFloodMiddleware(BaseMiddleware):
+    """Middleware для защиты от флуда - работает с ЛЮБЫМИ хендлерами"""
+    
+    def __init__(self):
+        super().__init__()
+    
     async def on_pre_process_message(self, message: types.Message, data: dict):
         user_id = message.from_user.id
         if user_id == ADMIN_ID:
             return
+        
         allow, error_message = await check_rate_limit(user_id)
         if not allow:
             await message.answer(error_message)
@@ -226,14 +235,15 @@ class AntiFloodMiddleware:
         user_id = call.from_user.id
         if user_id == ADMIN_ID:
             return
+        
         allow, error_message = await check_rate_limit(user_id)
         if not allow:
             await call.answer(error_message, show_alert=True)
             raise CancelHandler()
 
-from aiogram.dispatcher.handler import CancelHandler
+# Регистрируем middleware
 dp.middleware.setup(AntiFloodMiddleware())
-
+# ========================================================================
 # ==================== СОСТОЯНИЯ ====================
 class AddProduct(StatesGroup):
     category = State()
@@ -2523,6 +2533,7 @@ if __name__ == '__main__':
         print("\n🛑 Бот остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
+
 
 
 
