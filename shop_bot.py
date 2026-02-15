@@ -699,6 +699,26 @@ async def show_catalog(message: types.Message):
         reply_markup=get_categories_keyboard(is_admin=is_admin)
     )
 
+@dp.message_handler(text="↩️ К категориям")
+async def back_to_categories(message: types.Message):
+    """Возврат к списку категорий из подкатегорий"""
+    is_admin = (message.from_user.id == ADMIN_ID)
+    await message.answer(
+        "📂 <b>Выберите категорию:</b>",
+        parse_mode="HTML",
+        reply_markup=get_categories_keyboard(is_admin=is_admin)
+    )
+
+@dp.message_handler(text="↩️ Назад")
+async def go_back(message: types.Message):
+    """Возврат из категорий в каталог"""
+    is_admin = (message.from_user.id == ADMIN_ID)
+    await message.answer(
+        "📂 <b>Каталог:</b>",
+        parse_mode="HTML",
+        reply_markup=get_categories_keyboard(is_admin=is_admin)
+    )
+
 @dp.message_handler(lambda m: m.text in CATEGORIES.keys())
 async def show_category(message: types.Message):
     category = CATEGORIES.get(message.text)
@@ -2440,6 +2460,7 @@ async def callback_view_categories(call: types.CallbackQuery):
     await call.message.edit_reply_markup(None)
     await show_catalog(call.message)
 
+# ===== ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ДЛЯ КНОПКИ "ПЕРЕЙТИ В КОРЗИНУ" =====
 @dp.callback_query_handler(lambda c: c.data == "go_to_cart")
 async def go_to_cart_callback(call: types.CallbackQuery):
     user_id = str(call.from_user.id)
@@ -2447,6 +2468,7 @@ async def go_to_cart_callback(call: types.CallbackQuery):
     if not cart:
         await call.answer("🛒 Ваша корзина пуста.", show_alert=True)
         return
+    # Отправляем новое сообщение с корзиной, а не пытаемся редактировать текущее
     await show_cart(call.message)
     await call.answer()
 
