@@ -1038,16 +1038,6 @@ async def clear_cart_callback(call: types.CallbackQuery):
     await call.answer("🗑️ Корзина очищена", show_alert=False)
     await call.message.answer("🛒 Корзина пуста")
 
-@dp.callback_query_handler(lambda c: c.data == "go_to_cart")
-async def go_to_cart_callback(call: types.CallbackQuery):
-    user_id = str(call.from_user.id)
-    cart = user_carts.get(user_id, [])
-    if not cart:
-        await call.answer("🛒 Ваша корзина пуста.", show_alert=True)
-        return
-    await show_cart(call.message)
-    await call.answer()
-
 # ==================== ОФОРМЛЕНИЕ ЗАКАЗА ====================
 @dp.callback_query_handler(lambda c: c.data == "checkout")
 async def start_checkout(call: types.CallbackQuery, state: FSMContext):
@@ -2533,7 +2523,3 @@ if __name__ == '__main__':
         print("\n🛑 Бот остановлен")
     except Exception as e:
         print(f"❌ Ошибка: {e}")
-
-
-
-
