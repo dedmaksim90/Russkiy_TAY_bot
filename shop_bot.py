@@ -346,7 +346,8 @@ def get_subcategories_keyboard(category_name: str, is_admin=False):
         keyboard.add(KeyboardButton("↩️ К категориям"), KeyboardButton("🏠 В начало"))
     return keyboard
 
-def get_product_keyboard(product_id: str, product_data: dict, show_cart_button: bool = False, is_admin: bool = False):
+# ИСПРАВЛЕНО: убрана кнопка "Перейти в корзину"
+def get_product_keyboard(product_id: str, product_data: dict, is_admin: bool = False):
     keyboard = InlineKeyboardMarkup(row_width=1)
     if is_admin:
         keyboard.add(
@@ -365,8 +366,7 @@ def get_product_keyboard(product_id: str, product_data: dict, show_cart_button: 
             keyboard.add(
                 InlineKeyboardButton("🔔 Уведомить о появлении", callback_data=f"notify_{product_id}")
             )
-        if show_cart_button:
-            keyboard.add(InlineKeyboardButton("🛒 Перейти в корзину", callback_data="go_to_cart"))
+        # Кнопка "Перейти в корзину" УДАЛЕНА
     return keyboard
 
 def get_cart_keyboard(cart_items):
@@ -760,10 +760,16 @@ async def show_products(message: types.Message):
                 product['photo'],
                 caption=caption,
                 parse_mode="HTML",
-                reply_markup=get_product_keyboard(product['id'], product, show_cart_button=not is_admin, is_admin=is_admin)
+                # ИСПРАВЛЕНО: убран параметр show_cart_button
+                reply_markup=get_product_keyboard(product['id'], product, is_admin=is_admin)
             )
         else:
-            await message.answer(caption, parse_mode="HTML", reply_markup=get_product_keyboard(product['id'], product, show_cart_button=not is_admin, is_admin=is_admin))
+            await message.answer(
+                caption, 
+                parse_mode="HTML", 
+                # ИСПРАВЛЕНО: убран параметр show_cart_button
+                reply_markup=get_product_keyboard(product['id'], product, is_admin=is_admin)
+            )
         if not is_admin:
             increment_product_view(product['id'])
     except Exception as e:
@@ -847,7 +853,8 @@ async def add_to_cart(call: types.CallbackQuery):
         current_quantity = 1
     save_data()
     await call.answer(f"✅ {product.get('subcategory', 'Товар')} добавлен в корзину! 📦 В корзине: {current_quantity} шт.", show_alert=False)
-    new_keyboard = get_product_keyboard(product_id, product, show_cart_button=True, is_admin=False)
+    # ИСПРАВЛЕНО: убран параметр show_cart_button
+    new_keyboard = get_product_keyboard(product_id, product, is_admin=False)
     try:
         if call.message.photo:
             await call.message.edit_caption(
@@ -2460,7 +2467,6 @@ async def callback_view_categories(call: types.CallbackQuery):
     await call.message.edit_reply_markup(None)
     await show_catalog(call.message)
 
-# ===== ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ДЛЯ КНОПКИ "ПЕРЕЙТИ В КОРЗИНУ" =====
 @dp.callback_query_handler(lambda c: c.data == "go_to_cart")
 async def go_to_cart_callback(call: types.CallbackQuery):
     user_id = str(call.from_user.id)
@@ -2468,7 +2474,6 @@ async def go_to_cart_callback(call: types.CallbackQuery):
     if not cart:
         await call.answer("🛒 Ваша корзина пуста.", show_alert=True)
         return
-    # Отправляем новое сообщение с корзиной, а не пытаемся редактировать текущее
     await show_cart(call.message)
     await call.answer()
 
