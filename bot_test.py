@@ -27,7 +27,7 @@ if not BOT_TOKEN:
 
 # Главный администратор (владелец)
 OWNER_ID = int(os.getenv('OWNER_ID', 439446887))
-CHANNEL_ID = "@RusskiyTAY"
+CHANNEL_ID = "@test_shop654"
 DELIVERY_COST = 300
 FREE_DELIVERY_THRESHOLD = 2000
 PICKUP_ADDRESS = "Нижний Новгород ул. Профинтерна д.26"
@@ -2759,4 +2759,5 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print("\n🛑 Бот остановлен")
     except Exception as e:
+
         print(f"❌ Ошибка: {e}")
