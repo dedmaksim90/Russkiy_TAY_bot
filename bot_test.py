@@ -198,63 +198,299 @@ CATEGORIES = {
     }
 }
 
-# ==================== БАЗА ДАННЫХ ====================
+# ==================== ПОДКЛЮЧЕНИЕ К MONGODB ====================
 # Подключение к MongoDB
 MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb+srv://bot_admin:YourPassword@cluster0.xxxxx.mongodb.net/')
 DB_NAME = 'telegram_bot'
 
-try:
-    mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-    db = mongo_client[DB_NAME]
-    
-    # Коллекции (заменяют словари)
-    products_db = db['products']
-    individual_products_db = db['individual_products']
-    orders_db = db['orders']
-    user_carts = db['user_carts']
-    notifications_db = db['notifications']
-    product_views_db = db['product_views']
-    order_return_items_db = db['order_return_items']
-    manual_add_requests_db = db['manual_add_requests']
-    user_stats_db = db['user_stats']
-    reviews_db = db['reviews']
-    admins_collection = db['admins']
-    buyer_mode_collection = db['buyer_mode_users']
-    
-    print("✅ MongoDB подключена!")
-except Exception as e:
-    print(f"❌ Ошибка подключения к MongoDB: {e}")
-    db = None
+# Глобальные переменные
+db = None
+mongo_client = None
+products_db = None
+individual_products_db = None
+orders_db = None
+user_carts = None
+notifications_db = None
+product_views_db = None
+order_return_items_db = None
+manual_add_requests_db = None
+user_stats_db = None
+reviews_db = None
+admins_collection = None
+buyer_mode_collection = None
+admins_db = set()
+buyer_mode_users = set()
 
-# ==================== ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ ДАННЫХ ====================
-# Путь к файлу базы данных (в той же папке, где скрипт)
-DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shop_data.json')
-
-def save_data():
-    """Сохранение данных (для MongoDB не нужно, данные сохраняются автоматически)"""
-    pass  # MongoDB сохраняет автоматически
-
-
-def load_data():
-    """Загрузка данных из MongoDB"""
-    global admins_db, buyer_mode_users
+def connect_to_mongodb():
+    """Подключение к MongoDB"""
+    global db, mongo_client, products_db, individual_products_db, orders_db
+    global user_carts, notifications_db, product_views_db, order_return_items_db
+    global manual_add_requests_db, user_stats_db, reviews_db
+    global admins_collection, buyer_mode_collection, admins_db, buyer_mode_users
     
     try:
-        # Загружаем админов из MongoDB
+        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        # Проверка подключения
+        mongo_client.admin.command('ping')
+        db = mongo_client[DB_NAME]
+        
+        # Инициализация коллекций
+        products_db = db['products']
+        individual_products_db = db['individual_products']
+        orders_db = db['orders']
+        user_carts = db['user_carts']
+        notifications_db = db['notifications']
+        product_views_db = db['product_views']
+        order_return_items_db = db['order_return_items']
+        manual_add_requests_db = db['manual_add_requests']
+        user_stats_db = db['user_stats']
+        reviews_db = db['reviews']
+        admins_collection = db['admins']
+        buyer_mode_collection = db['buyer_mode_users']
+        
+        # Создаём индексы для ускорения поиска
+        try:
+            products_db.create_index('id', unique=True)
+            individual_products_db.create_index('id', unique=True)
+            orders_db.create_index('id', unique=True)
+            orders_db.create_index('user_id')
+            admins_collection.create_index('user_id', unique=True)
+            buyer_mode_collection.create_index('user_id', unique=True)
+        except:
+            pass
+        
+        # Загружаем админов в кэш
         admins_db = set()
         for admin in admins_collection.find():
             admins_db.add(admin['user_id'])
         
-        # Загружаем пользователей в режиме покупателя
         buyer_mode_users = set()
         for user in buyer_mode_collection.find():
             buyer_mode_users.add(user['user_id'])
         
-        logging.info("📂 Данные загружены из MongoDB")
-        logging.info(f"   • Администраторов: {len(admins_db)}")
-        logging.info(f"   • Пользователей в режиме покупателя: {len(buyer_mode_users)}")
+        return True
     except Exception as e:
-        logging.error(f"❌ Ошибка при загрузке данных: {e}")
+        logging.error(f"❌ Ошибка подключения к MongoDB: {e}")
+        # Инициализируем пустые коллекции для работы без MongoDB
+        products_db = {}
+        individual_products_db = {}
+        orders_db = {}
+        user_carts = {}
+        notifications_db = {}
+        product_views_db = {}
+        order_return_items_db = {}
+        manual_add_requests_db = {}
+        user_stats_db = {}
+        reviews_db = {}
+        return False
+
+# ==================== ФУНКЦИИ ДЛЯ MONGODB ====================
+def save_data():
+    """Сохранение данных (для MongoDB не нужно)"""
+    pass
+
+def get_product(product_id: str):
+    """Получить товар по ID"""
+    if products_db is None:
+        return None
+    if isinstance(products_db, dict):
+        return products_db.get(product_id)
+    return products_db.find_one({'id': product_id})
+
+def get_all_products():
+    """Получить все товары"""
+    if products_db is None:
+        return []
+    if isinstance(products_db, dict):
+        return list(products_db.values())
+    return list(products_db.find())
+
+def add_product(product_data: dict):
+    """Добавить товар"""
+    if products_db is None:
+        return False
+    if isinstance(products_db, dict):
+        products_db[product_data['id']] = product_data
+        return True
+    try:
+        products_db.insert_one(product_data)
+        return True
+    except:
+        return False
+
+def update_product(product_id: str, update_data: dict):
+    """Обновить товар"""
+    if products_db is None:
+        return False
+    if isinstance(products_db, dict):
+        if product_id in products_db:
+            products_db[product_id].update(update_data)
+            return True
+        return False
+    try:
+        products_db.update_one({'id': product_id}, {'$set': update_data})
+        return True
+    except:
+        return False
+
+def delete_product(product_id: str):
+    """Удалить товар"""
+    if products_db is None:
+        return False
+    if isinstance(products_db, dict):
+        if product_id in products_db:
+            del products_db[product_id]
+            return True
+        return False
+    try:
+        products_db.delete_one({'id': product_id})
+        return True
+    except:
+        return False
+
+def add_individual_product(product_data: dict):
+    """Добавить индивидуальную тушку"""
+    if individual_products_db is None:
+        return False
+    if isinstance(individual_products_db, dict):
+        individual_products_db[product_data['id']] = product_data
+        return True
+    try:
+        individual_products_db.insert_one(product_data)
+        return True
+    except:
+        return False
+
+def update_individual_product(product_id: str, update_data: dict):
+    """Обновить индивидуальную тушку"""
+    if individual_products_db is None:
+        return False
+    if isinstance(individual_products_db, dict):
+        if product_id in individual_products_db:
+            individual_products_db[product_id].update(update_data)
+            return True
+        return False
+    try:
+        individual_products_db.update_one({'id': product_id}, {'$set': update_data})
+        return True
+    except:
+        return False
+
+def add_order(order_data: dict):
+    """Добавить заказ"""
+    if orders_db is None:
+        return False
+    if isinstance(orders_db, dict):
+        orders_db[order_data['id']] = order_data
+        return True
+    try:
+        orders_db.insert_one(order_data)
+        return True
+    except:
+        return False
+
+def update_order(order_id: str, update_data: dict):
+    """Обновить заказ"""
+    if orders_db is None:
+        return False
+    if isinstance(orders_db, dict):
+        if order_id in orders_db:
+            orders_db[order_id].update(update_data)
+            return True
+        return False
+    try:
+        orders_db.update_one({'id': order_id}, {'$set': update_data})
+        return True
+    except:
+        return False
+
+def add_admin(user_id: int):
+    """Добавить админа"""
+    if admins_collection is None:
+        admins_db.add(user_id)
+        return True
+    if isinstance(admins_collection, dict):
+        admins_db.add(user_id)
+        return True
+    try:
+        admins_collection.insert_one({'user_id': user_id})
+        admins_db.add(user_id)
+        return True
+    except:
+        return False
+
+def remove_admin(user_id: int):
+    """Удалить админа"""
+    if admins_collection is None:
+        admins_db.discard(user_id)
+        return True
+    if isinstance(admins_collection, dict):
+        admins_db.discard(user_id)
+        return True
+    try:
+        admins_collection.delete_one({'user_id': user_id})
+        admins_db.discard(user_id)
+        return True
+    except:
+        return False
+
+def add_buyer_mode_user(user_id: int):
+    """Добавить в режим покупателя"""
+    if buyer_mode_collection is None:
+        buyer_mode_users.add(user_id)
+        return True
+    if isinstance(buyer_mode_collection, dict):
+        buyer_mode_users.add(user_id)
+        return True
+    try:
+        buyer_mode_collection.insert_one({'user_id': user_id})
+        buyer_mode_users.add(user_id)
+        return True
+    except:
+        return False
+
+def remove_buyer_mode_user(user_id: int):
+    """Удалить из режима покупателя"""
+    if buyer_mode_collection is None:
+        buyer_mode_users.discard(user_id)
+        return True
+    if isinstance(buyer_mode_collection, dict):
+        buyer_mode_users.discard(user_id)
+        return True
+    try:
+        buyer_mode_collection.delete_one({'user_id': user_id})
+        buyer_mode_users.discard(user_id)
+        return True
+    except:
+        return False
+
+def add_review(product_id: str, review_data: dict):
+    """Добавить отзыв"""
+    if reviews_db is None:
+        return False
+    if isinstance(reviews_db, dict):
+        if product_id not in reviews_db:
+            reviews_db[product_id] = []
+        reviews_db[product_id].append(review_data)
+        return True
+    try:
+        reviews_db.update_one(
+            {'product_id': product_id},
+            {'$push': {'reviews': review_data}},
+            upsert=True
+        )
+        return True
+    except:
+        return False
+
+def get_reviews(product_id: str):
+    """Получить отзывы"""
+    if reviews_db is None:
+        return []
+    if isinstance(reviews_db, dict):
+        return reviews_db.get(product_id, [])
+    review_doc = reviews_db.find_one({'product_id': product_id})
+    return review_doc.get('reviews', []) if review_doc else []
 
 # ==================== АВТОПЕРЕНОС ТОВАРОВ ИЗ ОХЛАЖДЕННОГО В ЗАМОРОЖЕННОЕ ====================
 async def check_and_freeze_meat():
@@ -266,35 +502,36 @@ async def check_and_freeze_meat():
     meat_category = CATEGORIES.get("🍗 Мясо")
     if not meat_category:
         return
-    
+
     freeze_delay = meat_category.get("freeze_delay_hours", 48)
-    
-    for product_id, product in products_db.items():
+
+    for product in get_all_products():
+        product_id = product.get('id')
         if product.get('category') != "🍗 Мясо":
             continue
         if product.get('subcategory_type') != "❄️ Охлажденное":
             continue
         if product.get('quantity', 0) <= 0:
             continue
-        
+
         # Проверяем, когда товар был добавлен в охлажденное
         created_at_str = product.get('created_at')
         if not created_at_str:
             continue
-        
+
         try:
             created_at = datetime.strptime(created_at_str, "%d.%m.%Y %H:%M")
             hours_diff = (now - created_at).total_seconds() / 3600
-            
+
             if hours_diff >= freeze_delay:
                 # Переносим в замороженное
-                product['subcategory_type'] = "🧊 Замороженное"
-                product['frozen_at'] = now.strftime("%d.%m.%Y %H:%M")
+                update_product(product_id, {
+                    'subcategory_type': "🧊 Замороженное",
+                    'frozen_at': now.strftime("%d.%m.%Y %H:%M")
+                })
                 logging.info(f"Товар {product_id} ({product.get('subcategory')}) перенесен из охлажденного в замороженное")
         except Exception as e:
             logging.error(f"Ошибка при проверке заморозки товара {product_id}: {e}")
-    
-    save_data()
 
 async def start_freeze_checker():
     """Запускает периодическую проверку заморозки"""
