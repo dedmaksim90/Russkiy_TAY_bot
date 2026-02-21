@@ -6,6 +6,7 @@ import uuid
 import random
 import time
 import hashlib
+from pymongo import MongoClient
 from collections import defaultdict
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Any, Optional, Tuple
@@ -194,49 +195,62 @@ CATEGORIES = {
 }
 
 # ==================== БАЗА ДАННЫХ ====================
-products_db = {}
-orders_db = {}
-user_carts = {}
-notifications_db = {}
-product_views_db = {}
-order_return_items_db = {}
-manual_add_requests_db = {}
-user_stats_db = {}
+# Подключение к MongoDB
+MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb+srv://bot_admin:YourPassword@cluster0.xxxxx.mongodb.net/')
+DB_NAME = 'telegram_bot'
+
+try:
+    mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+    db = mongo_client[DB_NAME]
+    
+    # Коллекции (заменяют словари)
+    products_db = db['products']
+    individual_products_db = db['individual_products']
+    orders_db = db['orders']
+    user_carts = db['user_carts']
+    notifications_db = db['notifications']
+    product_views_db = db['product_views']
+    order_return_items_db = db['order_return_items']
+    manual_add_requests_db = db['manual_add_requests']
+    user_stats_db = db['user_stats']
+    reviews_db = db['reviews']
+    admins_collection = db['admins']
+    buyer_mode_collection = db['buyer_mode_users']
+    
+    print("✅ MongoDB подключена!")
+except Exception as e:
+    print(f"❌ Ошибка подключения к MongoDB: {e}")
+    db = None
 
 # ==================== ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ ДАННЫХ ====================
+# Путь к файлу базы данных (в той же папке, где скрипт)
+DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'shop_data.json')
+
 def save_data():
-    data = {
-        'products': products_db,
-        'orders': orders_db,
-        'carts': user_carts,
-        'notifications': notifications_db,
-        'product_views': product_views_db,
-        'order_return_items': order_return_items_db,
-        'manual_add_requests': manual_add_requests_db,
-        'user_stats': user_stats_db,
-        'admins': list(admins_db),
-        'buyer_mode_users': list(buyer_mode_users)
-    }
-    with open('shop_data.json', 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+    """Сохранение данных (для MongoDB не нужно, данные сохраняются автоматически)"""
+    pass  # MongoDB сохраняет автоматически
+
 
 def load_data():
-    global products_db, orders_db, user_carts, notifications_db, product_views_db, order_return_items_db, manual_add_requests_db, user_stats_db, admins_db, buyer_mode_users
+    """Загрузка данных из MongoDB"""
+    global admins_db, buyer_mode_users
+    
     try:
-        with open('shop_data.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        products_db = data.get('products', {})
-        orders_db = data.get('orders', {})
-        user_carts = data.get('carts', {})
-        notifications_db = data.get('notifications', {})
-        product_views_db = data.get('product_views', {})
-        order_return_items_db = data.get('order_return_items', {})
-        manual_add_requests_db = data.get('manual_add_requests', {})
-        user_stats_db = data.get('user_stats', {})
-        admins_db = set(data.get('admins', []))
-        buyer_mode_users = set(data.get('buyer_mode_users', []))
-    except FileNotFoundError:
-        pass
+        # Загружаем админов из MongoDB
+        admins_db = set()
+        for admin in admins_collection.find():
+            admins_db.add(admin['user_id'])
+        
+        # Загружаем пользователей в режиме покупателя
+        buyer_mode_users = set()
+        for user in buyer_mode_collection.find():
+            buyer_mode_users.add(user['user_id'])
+        
+        logging.info("📂 Данные загружены из MongoDB")
+        logging.info(f"   • Администраторов: {len(admins_db)}")
+        logging.info(f"   • Пользователей в режиме покупателя: {len(buyer_mode_users)}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка при загрузке данных: {e}")
 
 # ==================== АВТОПЕРЕНОС ТОВАРОВ ИЗ ОХЛАЖДЕННОГО В ЗАМОРОЖЕННОЕ ====================
 async def check_and_freeze_meat():
@@ -361,6 +375,18 @@ class AddAdminState(StatesGroup):
 class RemoveAdminState(StatesGroup):
     user_id = State()
 
+class ReviewState(StatesGroup):
+    product_id = State()
+    rating = State()
+    text = State()
+
+class UploadExcelState(StatesGroup):
+    product_id = State()
+
+class SelectWeightState(StatesGroup):
+    product_id = State()
+    weight_category = State()
+
 # ==================== КЛАВИАТУРЫ ====================
 def get_main_keyboard(is_admin=False, is_buyer_mode=False):
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -397,6 +423,7 @@ def get_admin_keyboard():
         KeyboardButton("📤 Опубликовать в канал")
     )
     keyboard.add(
+        KeyboardButton("📊 Загрузить прайс (Excel)"),
         KeyboardButton("✏️ Управление товарами"),
         KeyboardButton("📊 Статистика"),
         KeyboardButton("📈 Аналитика"),
@@ -518,10 +545,20 @@ def get_product_keyboard(product_id: str, product_data: dict, is_admin: bool = F
                 InlineKeyboardButton("🛒 В корзину", callback_data=f"add_{product_id}"),
                 InlineKeyboardButton("📝 Добавить вручную", callback_data=f"manual_add_{product_id}")
             )
+            # Кнопки отзывов для товаров с выбором веса (цыпленок бройлер)
+            if product_data.get('subcategory') == "🐓 Цыпленок бройлер":
+                keyboard.add(
+                    InlineKeyboardButton("📋 Выбрать по весу", callback_data=f"select_weight_{product_id}")
+                )
         else:
             keyboard.add(
                 InlineKeyboardButton("🔔 Уведомить о появлении", callback_data=f"notify_{product_id}")
             )
+        # Кнопки отзывов для всех товаров
+        keyboard.add(
+            InlineKeyboardButton("✍️ Оставить отзыв", callback_data=f"write_review_{product_id}"),
+            InlineKeyboardButton("📖 Читать отзывы", callback_data=f"read_reviews_{product_id}")
+        )
     return keyboard
 
 def get_cart_keyboard(cart_items):
@@ -690,6 +727,47 @@ def get_admins_list_keyboard():
             callback_data=f"remove_admin_{admin_id}"
         ))
     keyboard.add(InlineKeyboardButton("🔙 Назад", callback_data="admin_management"))
+    return keyboard
+
+def get_review_keyboard(product_id: str):
+    """Клавиатура для отзывов о товаре"""
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("✍️ Оставить отзыв", callback_data=f"write_review_{product_id}"),
+        InlineKeyboardButton("📖 Читать отзывы", callback_data=f"read_reviews_{product_id}")
+    )
+    return keyboard
+
+def get_rating_keyboard(product_id: str):
+    """Клавиатура для выбора оценки"""
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    keyboard.row(
+        InlineKeyboardButton("⭐️ 1", callback_data=f"rating_1_{product_id}"),
+        InlineKeyboardButton("⭐️ 2", callback_data=f"rating_2_{product_id}"),
+        InlineKeyboardButton("⭐️ 3", callback_data=f"rating_3_{product_id}")
+    )
+    keyboard.row(
+        InlineKeyboardButton("⭐️ 4", callback_data=f"rating_4_{product_id}"),
+        InlineKeyboardButton("⭐️ 5", callback_data=f"rating_5_{product_id}")
+    )
+    keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel_review"))
+    return keyboard
+
+def get_weight_category_keyboard(product_id: str):
+    """Клавиатура для выбора весовой категории цыпленка"""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        InlineKeyboardButton("🐔 2.0 - 2.5 кг", callback_data=f"weight_2.0_2.5_{product_id}"),
+        InlineKeyboardButton("🐔 2.6 - 3.0 кг", callback_data=f"weight_2.6_3.0_{product_id}"),
+        InlineKeyboardButton("🐔 3.0+ кг", callback_data=f"weight_3.0+_{product_id}")
+    )
+    keyboard.add(InlineKeyboardButton("❌ Отмена", callback_data="cancel_weight"))
+    return keyboard
+
+def get_back_to_reviews_keyboard(product_id: str):
+    """Клавиатура возврата к отзывам"""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(InlineKeyboardButton("🔙 Назад к отзывам", callback_data=f"read_reviews_{product_id}"))
     return keyboard
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
@@ -1460,6 +1538,19 @@ async def create_order(message_or_call, state: FSMContext, address: str):
         delivery_method = data.get('delivery_method')
         customer_name = data.get('name', username or 'Не указано')
         customer_phone = data.get('phone', 'Не указан')
+        # Получаем информацию о забронированной тушке
+        selected_product_id = data.get('selected_product')
+        weight_category = data.get('weight_category')
+    
+    # Получаем информацию о забронированной тушке
+    reserved_chicken = None
+    if selected_product_id and selected_product_id in individual_products_db:
+        reserved_chicken = individual_products_db[selected_product_id]
+        # Помечаем как проданную
+        reserved_chicken['status'] = 'sold'
+        reserved_chicken['sold_at'] = datetime.now().strftime("%d.%m.%Y %H:%M")
+        reserved_chicken['sold_order'] = None  # Будет установлено ниже
+    
     if not cart:
         if isinstance(message_or_call, types.Message):
             await message_or_call.answer("❌ Корзина пуста")
@@ -1514,8 +1605,14 @@ async def create_order(message_or_call, state: FSMContext, address: str):
             'changed_by': 'system'
         }],
         'created_at': datetime.now().strftime("%d.%m.%Y %H:%M"),
-        'has_exact_price': has_exact_price_only
+        'has_exact_price': has_exact_price_only,
+        'reserved_chicken': reserved_chicken
     }
+    
+    # Обновляем запись о тушке с номером заказа
+    if reserved_chicken:
+        individual_products_db[selected_product_id]['sold_order'] = order_id
+    
     update_user_stats(user_id, orders_db[order_id])
     save_data()
     order_text = f"🎉 НОВЫЙ ЗАКАЗ #{order_id}\n\n"
@@ -1544,6 +1641,14 @@ async def create_order(message_or_call, state: FSMContext, address: str):
         order_text += f"📍 Адрес: {address}\n"
     if total - DELIVERY_COST < FREE_DELIVERY_THRESHOLD:
         order_text += f"🚚 Доставка: {DELIVERY_COST} руб.\n"
+    
+    # Добавляем информацию о забронированной тушке
+    if reserved_chicken:
+        order_text += f"\n🐔 ЗАБРОНИРОВАННАЯ ТУШКА\n"
+        order_text += f"⚖️ Вес: {reserved_chicken.get('weight', 0)} кг\n"
+        order_text += f"📦 Категория: {weight_category or 'Не указана'}\n"
+        order_text += f"💰 Цена за кг: {products_db.get(reserved_chicken.get('product_id'), {}).get('price', 0)} руб.\n"
+    
     order_text += f"\n👤 Покупатель: {customer_name}\n"
     order_text += f"📞 Телефон: {customer_phone}\n"
     order_text += f"👤 Username: @{username or 'без username'}\n"
@@ -1784,7 +1889,11 @@ async def process_category_state(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.finish()
         return
-    if message.text not in CATEGORIES:
+    
+    # Извлекаем чистое название категории (убираем счетчик в скобках)
+    category_text = message.text.split(' (')[0]
+    
+    if category_text not in CATEGORIES:
         if message.text == "👑 Панель админа":
             await state.finish()
             await message.answer("❌ Добавление отменено", reply_markup=get_admin_keyboard())
@@ -1794,20 +1903,23 @@ async def process_category_state(message: types.Message, state: FSMContext):
         else:
             await message.answer("❌ Выберите категорию из списка!")
         return
+    
     async with state.proxy() as data:
-        data['category'] = message.text
+        data['category'] = category_text
     await AddProduct.next()
-    await message.answer("📂 Выберите рубрику:", reply_markup=get_subcategories_keyboard(message.text, is_admin=True))
+    await message.answer("📂 Выберите рубрику:", reply_markup=get_subcategories_keyboard(category_text, is_admin=True))
 
 @dp.message_handler(state=AddProduct.subcategory)
 async def process_subcategory_state(message: types.Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.finish()
         return
+    
     if message.text == "👑 Панель админа":
         await state.finish()
         await message.answer("❌ Добавление отменено", reply_markup=get_admin_keyboard())
         return
+    
     if message.text == "↩️ К категориям":
         await AddProduct.category.set()
         await message.answer("↩️ Выберите категорию:", reply_markup=get_categories_keyboard(is_admin=True))
@@ -1817,31 +1929,34 @@ async def process_subcategory_state(message: types.Message, state: FSMContext):
         category = data['category']
         category_data = CATEGORIES.get(category)
         
+        # Извлекаем чистое название (убираем счетчик)
+        subcategory_text = message.text.split(' (')[0]
+        
         # Проверяем, есть ли вложенные подкатегории (для мяса)
         subcategories = category_data.get("subcategories", [])
         if isinstance(subcategories, dict):
             # Для мяса: сначала выбираем тип хранения (охлажденное/замороженное)
-            if message.text in subcategories:
-                data['subcategory_type'] = message.text  # "❄️ Охлажденное" или "🧊 Замороженное"
+            if subcategory_text in subcategories:
+                data['subcategory_type'] = subcategory_text  # "❄️ Охлажденное" или "🧊 Замороженное"
                 # Показываем рубрики внутри этого типа
-                await message.answer("🥩 Выберите рубрику:", reply_markup=get_rubrics_keyboard(category, message.text, is_admin=True))
+                await message.answer("🥩 Выберите рубрику:", reply_markup=get_rubrics_keyboard(category, subcategory_text, is_admin=True))
                 return
             elif data.get('subcategory_type'):
                 # Уже выбран тип хранения, теперь выбираем рубрику
-                data['subcategory'] = message.text
+                data['subcategory'] = subcategory_text
             else:
                 await message.answer("❌ Сначала выберите тип хранения!")
                 return
         else:
             # Для яиц и полуфабрикатов
-            data['subcategory'] = message.text
+            data['subcategory'] = subcategory_text
         
         subcategory = data.get('subcategory')
         subcategory_type = data.get('subcategory_type')
         
         # Проверяем существование товара
         existing_products = [p for p in products_db.values()
-                             if p.get('category') == category and 
+                             if p.get('category') == category and
                              p.get('subcategory') == subcategory and
                              (not subcategory_type or p.get('subcategory_type') == subcategory_type)]
         if existing_products:
@@ -1921,6 +2036,115 @@ async def process_photo_state(message: types.Message, state: FSMContext):
     )
     await state.finish()
     await message.answer("✅ Товар сохранен! Теперь можете опубликовать его в канале.", reply_markup=get_admin_keyboard())
+
+@dp.message_handler(text="📊 Загрузить прайс (Excel)")
+async def upload_excel_start(message: types.Message):
+    if not is_admin(message.from_user.id):
+        return
+    await UploadExcelState.product_id.set()
+    await message.answer(
+        "📊 Загрузка прайса из Excel\n\n"
+        "📝 Формат файла:\n"
+        "• Столбец A: Название (например 'Цыпленок бройлер')\n"
+        "• Столбец B: Вес в кг (например 2.5)\n\n"
+        "📤 Отправьте Excel файл (.xlsx):",
+        parse_mode="HTML"
+    )
+
+@dp.message_handler(content_types=types.ContentType.DOCUMENT, state=UploadExcelState.product_id)
+async def process_excel_upload(message: types.Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.finish()
+        return
+    
+    # Проверяем расширение файла
+    file_name = message.document.file_name
+    if not file_name.endswith('.xlsx'):
+        await message.answer("❌ Пожалуйста, отправьте файл в формате .xlsx")
+        return
+    
+    try:
+        # Скачиваем файл
+        file_info = await bot.get_file(message.document.file_id)
+        file_path = file_info.file_path
+        downloaded_file = await bot.download_file(file_path)
+        
+        # Сохраняем временно
+        import io
+        try:
+            import openpyxl
+        except ImportError:
+            await message.answer("❌ Модуль openpyxl не установлен. Установите командой: pip install openpyxl")
+            await state.finish()
+            return
+        
+        # Читаем Excel
+        wb = openpyxl.load_workbook(filename=io.BytesIO(downloaded_file.read()))
+        sheet = wb.active
+        
+        # Считываем данные
+        uploaded_count = 0
+        error_count = 0
+        
+        for row in sheet.iter_rows(min_row=2, values_only=True):  # Пропускаем заголовок
+            try:
+                if len(row) < 2:
+                    continue
+                
+                name = str(row[0]).strip() if row[0] else None
+                weight = float(row[1]) if row[1] else None
+                
+                if not name or not weight:
+                    error_count += 1
+                    continue
+                
+                # Находим товар по названию
+                product_id = None
+                for pid, prod in products_db.items():
+                    if prod.get('subcategory') == name and name == "🐓 Цыпленок бройлер":
+                        product_id = pid
+                        break
+                
+                if not product_id:
+                    error_count += 1
+                    continue
+                
+                # Создаем индивидуальную тушку
+                indiv_id = str(uuid.uuid4())[:8]
+                individual_products_db[indiv_id] = {
+                    'id': indiv_id,
+                    'product_id': product_id,
+                    'subcategory': name,
+                    'weight': weight,
+                    'status': 'available',  # available, reserved, sold
+                    'reserved_by': None,
+                    'added_at': datetime.now().strftime("%d.%m.%Y %H:%M")
+                }
+                uploaded_count += 1
+                
+            except Exception as e:
+                error_count += 1
+                logging.error(f"Ошибка при чтении строки: {e}")
+        
+        save_data()
+        
+        await message.answer(
+            f"✅ Прайс загружен!\n\n"
+            f"📊 Добавлено тушек: {uploaded_count}\n"
+            f"❌ Ошибок: {error_count}\n\n"
+            f"Теперь клиенты могут выбирать цыпленка по весу.",
+            parse_mode="HTML",
+            reply_markup=get_admin_keyboard()
+        )
+        
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при загрузке: {e}")
+    
+    await state.finish()
+
+@dp.message_handler(state=UploadExcelState.product_id)
+async def invalid_excel_format(message: types.Message, state: FSMContext):
+    await message.answer("❌ Это не Excel файл. Пожалуйста, отправьте файл .xlsx")
 
 @dp.message_handler(text="📦 Пополнить остатки")
 async def add_quantity_start(message: types.Message):
@@ -2378,7 +2602,7 @@ async def process_add_admin(message: types.Message, state: FSMContext):
         admins_db.add(new_admin_id)
         save_data()
         await message.answer(
-            f"✅ Пользователь {new_admin_id} добавлен в администраторы!\n\n"
+            f"✅ Пользов��тель {new_admin_id} добавлен в администраторы!\n\n"
             f"Теперь он может управлять хозяйством.",
             parse_mode="HTML",
             reply_markup=get_admin_keyboard()
@@ -2408,7 +2632,7 @@ async def remove_admin_start(call: types.CallbackQuery):
         return
     if not admins_db:
         await call.message.answer(
-            "📭 Нет администраторов для удаления.\n\n"
+            "📭 Нет администраторов ����ля удаления.\n\n"
             f"Владелец: {OWNER_ID}",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup().add(
@@ -3040,6 +3264,228 @@ async def admin_panel_callback(call: types.CallbackQuery):
         parse_mode="HTML",
         reply_markup=get_admin_keyboard()
     )
+
+# ==================== ОТЗЫВЫ О ТОВАРАХ ====================
+@dp.callback_query_handler(lambda c: c.data.startswith('write_review_'))
+async def write_review_start(call: types.CallbackQuery, state: FSMContext):
+    product_id = call.data.split('_')[2]
+    product = products_db.get(product_id)
+    if not product:
+        await call.answer("❌ Товар не найден", show_alert=True)
+        return
+    
+    await state.update_data(product_id=product_id)
+    await ReviewState.rating.set()
+    await call.message.answer(
+        f"✍️ Оставьте отзыв о товаре\n\n"
+        f"📦 {product.get('subcategory', '')}\n\n"
+        f"Выберите оценку:",
+        parse_mode="HTML",
+        reply_markup=get_rating_keyboard(product_id)
+    )
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('rating_') and c.data != 'cancel_review')
+async def process_rating(call: types.CallbackQuery, state: FSMContext):
+    parts = call.data.split('_')
+    rating = parts[1]
+    product_id = parts[3] if len(parts) > 3 else parts[2]
+    
+    await state.update_data(rating=rating)
+    await ReviewState.text.set()
+    await call.message.answer(
+        f"⭐️ Вы выбрали оценку: {rating}\n\n"
+        f"Напишите ваш отзыв (или отправьте /skip чтобы пропустить):",
+        reply_markup=InlineKeyboardMarkup().add(InlineKeyboardButton("❌ Отмена", callback_data="cancel_review"))
+    )
+    await call.answer()
+
+@dp.message_handler(state=ReviewState.text)
+async def process_review_text(message: types.Message, state: FSMContext):
+    if message.text == "/skip":
+        review_text = ""
+    else:
+        review_text = message.text.strip()
+        if len(review_text) > 500:
+            await message.answer("❌ Отзыв слишком длинный (максимум 500 символов). Напишите короче:")
+            return
+    
+    data = await state.get_data()
+    product_id = data.get('product_id')
+    rating = data.get('rating')
+    
+    if not product_id or not rating:
+        await message.answer("❌ Ошибка при сохранении отзыва. Попробуйте снова.")
+        await state.finish()
+        return
+    
+    # Сохраняем отзыв
+    if product_id not in reviews_db:
+        reviews_db[product_id] = []
+    
+    review = {
+        'user_id': str(message.from_user.id),
+        'username': message.from_user.username or f"user_{message.from_user.id}",
+        'rating': int(rating),
+        'text': review_text,
+        'date': datetime.now().strftime("%d.%m.%Y %H:%M")
+    }
+    reviews_db[product_id].append(review)
+    save_data()
+    
+    await message.answer(
+        f"✅ Спасибо за ваш отзыв!\n\n"
+        f"Ваша оценка: {'⭐️' * int(rating)}\n"
+        f"Отзыв опубликован и будет виден другим покупателям.",
+        parse_mode="HTML",
+        reply_markup=get_back_to_reviews_keyboard(product_id)
+    )
+    await state.finish()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('read_reviews_'))
+async def read_reviews(call: types.CallbackQuery):
+    product_id = call.data.split('_')[2]
+    product = products_db.get(product_id)
+    if not product:
+        await call.answer("❌ Товар не найден", show_alert=True)
+        return
+    
+    reviews = reviews_db.get(product_id, [])
+    if not reviews:
+        await call.message.answer(
+            f"📖 Отзывы о товаре\n\n"
+            f"📦 {product.get('subcategory', '')}\n\n"
+            f"📭 Пока нет отзывов. Будьте первым!",
+            parse_mode="HTML",
+            reply_markup=get_review_keyboard(product_id)
+        )
+        await call.answer()
+        return
+    
+    # Считаем средний рейтинг
+    avg_rating = sum(r['rating'] for r in reviews) / len(reviews)
+    
+    reviews_text = f"📖 Отзывы о товаре\n\n"
+    reviews_text += f"📦 {product.get('subcategory', '')}\n"
+    reviews_text += f"⭐️ Средний рейтинг: {avg_rating:.1f} из 5 ({len(reviews)} отзывов)\n\n"
+    reviews_text += "─" * 30 + "\n\n"
+    
+    # Показываем последние 10 отзывов
+    for review in reviews[-10:][::-1]:
+        stars = '⭐️' * review['rating']
+        reviews_text += f"{stars} ({review['rating']}/5)\n"
+        reviews_text += f"👤 @{review['username']}, {review['date']}\n"
+        if review.get('text'):
+            reviews_text += f"💬 {review['text']}\n"
+        reviews_text += "\n" + "─" * 20 + "\n\n"
+    
+    await call.message.answer(
+        reviews_text,
+        parse_mode="HTML",
+        reply_markup=get_review_keyboard(product_id)
+    )
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "cancel_review")
+async def cancel_review(call: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await call.message.answer("❌ Отзыв отменен")
+    await call.answer()
+
+# ==================== ВЫБОР ВЕСА ЦЫПЛЕНКА ====================
+@dp.callback_query_handler(lambda c: c.data.startswith('select_weight_'))
+async def select_weight_start(call: types.CallbackQuery, state: FSMContext):
+    product_id = call.data.split('_')[2]
+    product = products_db.get(product_id)
+    if not product:
+        await call.answer("❌ Товар не найден", show_alert=True)
+        return
+    
+    if product.get('subcategory') != "🐓 Цыпленок бройлер":
+        await call.answer("❌ Выбор по весу доступен только для цыпленка бройлера", show_alert=True)
+        return
+    
+    # Проверяем наличие доступных тушек
+    available = [p for p in individual_products_db.values() 
+                 if p.get('product_id') == product_id and p.get('status') == 'available']
+    
+    if not available:
+        await call.answer("❌ К сожалению, сейчас нет доступных тушек для выбора", show_alert=True)
+        return
+    
+    await state.update_data(product_id=product_id)
+    await SelectWeightState.weight_category.set()
+    await call.message.answer(
+        f"🐔 Выберите желаемый вес цыпленка\n\n"
+        f"📦 Товар: {product.get('subcategory')}\n"
+        f"💰 Цена: {product.get('price', 0)} руб./кг\n\n"
+        f"В наличии: {len(available)} шт.\n\n"
+        f"Выберите весовую категорию:",
+        parse_mode="HTML",
+        reply_markup=get_weight_category_keyboard(product_id)
+    )
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('weight_'))
+async def process_weight_selection(call: types.CallbackQuery, state: FSMContext):
+    parts = call.data.split('_')
+    product_id = parts[-1]
+    
+    # Определяем весовую категорию
+    if '2.0_2.5' in call.data:
+        min_weight, max_weight = 2.0, 2.5
+        category_name = "2.0-2.5 кг"
+    elif '2.6_3.0' in call.data:
+        min_weight, max_weight = 2.6, 3.0
+        category_name = "2.6-3.0 кг"
+    elif '3.0+' in call.data:
+        min_weight, max_weight = 3.0, 999
+        category_name = "3.0+ кг"
+    else:
+        await call.answer("❌ Неверная категория веса", show_alert=True)
+        return
+    
+    # Ищем доступную тушку в этой категории
+    available = [p for p in individual_products_db.values() 
+                 if p.get('product_id') == product_id and 
+                 p.get('status') == 'available' and
+                 min_weight <= p.get('weight', 0) <= max_weight]
+    
+    if not available:
+        await call.answer("❌ К сожалению, в этой категории сейчас нет доступных тушек", show_alert=True)
+        return
+    
+    # Выбираем первую доступную (можно улучшить логику выбора)
+    selected = available[0]
+    
+    async with state.proxy() as data:
+        data['weight_category'] = category_name
+        data['selected_product'] = selected['id']
+    
+    await SelectWeightState.product_id.set()
+    
+    weight = selected.get('weight', 0)
+    price_per_kg = products_db.get(product_id, {}).get('price', 0)
+    total_price = weight * price_per_kg
+    
+    await call.message.answer(
+        f"✅ Тушка забронирована!\n\n"
+        f"🐓 Цыпленок бройлер\n"
+        f"⚖️ Вес: {weight} кг\n"
+        f"💰 Цена за кг: {price_per_kg} руб.\n"
+        f"💰 Итого: ~{total_price:.0f} руб.\n\n"
+        f"📦 Категория: {category_name}\n\n"
+        f"Теперь добавьте товар в корзину обычным способом.\n"
+        f"Вес забронированной тушки будет указан в заказе.",
+        parse_mode="HTML"
+    )
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data == "cancel_weight")
+async def cancel_weight_selection(call: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await call.message.answer("❌ Выбор веса отменен")
+    await call.answer()
 
 # ==================== ЗАПУСК БОТА ====================
 async def on_startup(dp):
