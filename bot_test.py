@@ -36,6 +36,9 @@ CONTACT_PHONES = "+79506111165 Ирина и +79200783330 Сергей"
 # База администраторов (загружается из файла)
 admins_db = set()
 
+# Режим покупателя для админов (кто в режиме покупателя)
+buyer_mode_users = set()
+
 # Защита от флуда
 user_last_message_time = defaultdict(float)
 user_message_count = defaultdict(int)
@@ -139,8 +142,10 @@ def sanitize_log_data(user_id: int) -> str:
     hash_obj = hashlib.md5(f"{user_id}{salt}".encode())
     return f"user_{hash_obj.hexdigest()[:8]}"
 
-def is_admin(user_id: int) -> bool:
+def is_admin(user_id: int, check_buyer_mode: bool = True) -> bool:
     """Проверка, является ли пользователь администратором"""
+    if check_buyer_mode and user_id in buyer_mode_users:
+        return False
     return user_id == OWNER_ID or user_id in admins_db
 
 def is_owner(user_id: int) -> bool:
@@ -198,13 +203,14 @@ def save_data():
         'order_return_items': order_return_items_db,
         'manual_add_requests': manual_add_requests_db,
         'user_stats': user_stats_db,
-        'admins': list(admins_db)
+        'admins': list(admins_db),
+        'buyer_mode_users': list(buyer_mode_users)
     }
     with open('shop_data.json', 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2, default=str)
 
 def load_data():
-    global products_db, orders_db, user_carts, notifications_db, product_views_db, order_return_items_db, manual_add_requests_db, user_stats_db, admins_db
+    global products_db, orders_db, user_carts, notifications_db, product_views_db, order_return_items_db, manual_add_requests_db, user_stats_db, admins_db, buyer_mode_users
     try:
         with open('shop_data.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -217,6 +223,7 @@ def load_data():
         manual_add_requests_db = data.get('manual_add_requests', {})
         user_stats_db = data.get('user_stats', {})
         admins_db = set(data.get('admins', []))
+        buyer_mode_users = set(data.get('buyer_mode_users', []))
     except FileNotFoundError:
         pass
 
@@ -271,6 +278,8 @@ class EditProduct(StatesGroup):
 class CheckoutState(StatesGroup):
     delivery_method = State()
     address = State()
+    name = State()
+    phone = State()
 
 class AdjustQuantityState(StatesGroup):
     product_id = State()
@@ -296,7 +305,7 @@ class RemoveAdminState(StatesGroup):
     user_id = State()
 
 # ==================== КЛАВИАТУРЫ ====================
-def get_main_keyboard(is_admin=False):
+def get_main_keyboard(is_admin=False, is_buyer_mode=False):
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = [
         KeyboardButton("🛍️ Каталог"),
@@ -310,7 +319,9 @@ def get_main_keyboard(is_admin=False):
         else:
             keyboard.add(buttons[i])
     keyboard.add(KeyboardButton("🏠 В начало"))
-    if is_admin:
+    if is_buyer_mode:
+        keyboard.add(KeyboardButton("👑 Выйти из режима покупателя"))
+    elif is_admin:
         keyboard.add(KeyboardButton("👑 Панель админа"))
     return keyboard
 
@@ -694,11 +705,12 @@ async def cmd_start(message: types.Message):
 @dp.message_handler(text="🛍️ Начнем выбирать полезный продукт!")
 async def start_shopping(message: types.Message):
     user_is_admin = is_admin(message.from_user.id)
+    is_buyer = message.from_user.id in buyer_mode_users
     await message.answer(
         "🛍️ Отлично! Давайте выберем самые полезные и свежие продукты!\n\n"
         "Выберите действие:",
         parse_mode="HTML",
-        reply_markup=get_main_keyboard(is_admin=user_is_admin)
+        reply_markup=get_main_keyboard(is_admin=user_is_admin, is_buyer_mode=is_buyer)
     )
 
 @dp.message_handler(text="🏠 В начало")
@@ -719,13 +731,27 @@ async def switch_to_admin_mode(message: types.Message):
 
 @dp.message_handler(text="👤 Режим покупателя")
 async def switch_to_user_mode(message: types.Message):
-    if not is_admin(message.from_user.id):
+    if not is_admin(message.from_user.id, check_buyer_mode=False):
         return
+    buyer_mode_users.add(message.from_user.id)
+    save_data()
     await message.answer(
         "👤 Переключение в режим покупателя\n\n"
         "Теперь вы видите интерфейс как обычный покупатель.",
         parse_mode="HTML",
-        reply_markup=get_main_keyboard(is_admin=False)
+        reply_markup=get_main_keyboard(is_buyer_mode=True)
+    )
+
+@dp.message_handler(text="👑 Выйти из режима покупателя")
+async def exit_buyer_mode(message: types.Message):
+    user_id = message.from_user.id
+    if user_id in buyer_mode_users:
+        buyer_mode_users.discard(user_id)
+        save_data()
+    await message.answer(
+        "👑 Вы вышли из режима покупателя.\n\nТеперь вы снова видите панель администратора.",
+        parse_mode="HTML",
+        reply_markup=get_main_keyboard(is_admin=True)
     )
 
 @dp.message_handler(text="🛍️ Каталог")
@@ -818,8 +844,9 @@ async def show_cart(message: types.Message):
     cart = user_carts.get(user_id, [])
     if not cart:
         user_is_admin = is_admin(message.from_user.id)
+        is_buyer = message.from_user.id in buyer_mode_users
         await message.answer("🛒 Ваша корзина пуста.",
-                             reply_markup=get_main_keyboard(is_admin=user_is_admin))
+                             reply_markup=get_main_keyboard(is_admin=user_is_admin, is_buyer_mode=is_buyer))
         return
     total = 0
     text = "🛒 Ваша корзина:\n\n"
@@ -984,7 +1011,7 @@ async def process_manual_add_quantity(message: types.Message, state: FSMContext)
             f"📦 Добавлено: {quantity} {category_info.get('unit', 'шт')}\n"
             f"📦 Всего в корзине: {current_quantity}",
             parse_mode="HTML",
-            reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id))
+            reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id), is_buyer_mode=message.from_user.id in buyer_mode_users)
         )
     except Exception as e:
         await message.answer(f"❌ Ошибка: {str(e)}")
@@ -1132,7 +1159,13 @@ async def process_delivery_method(call: types.CallbackQuery, state: FSMContext):
         await CheckoutState.address.set()
         await call.message.answer("🏠 Введите адрес доставки:")
     else:
-        await create_order(call, state, PICKUP_ADDRESS)
+        async with state.proxy() as data:
+            data['address'] = PICKUP_ADDRESS
+        await CheckoutState.name.set()
+        await call.message.answer(
+            "👤 Введите ваше имя для оформления заказа:\n\n"
+            "Это поможет нам быстрее связаться с вами."
+        )
 
 @dp.message_handler(state=CheckoutState.address)
 async def process_address(message: types.Message, state: FSMContext):
@@ -1140,6 +1173,76 @@ async def process_address(message: types.Message, state: FSMContext):
     if not is_valid:
         await message.answer(error_msg)
         return
+    async with state.proxy() as data:
+        data['address'] = address
+    await CheckoutState.name.set()
+    await message.answer(
+        "👤 Введите ваше имя для оформления заказа:\n\n"
+        "Это поможет нам быстрее связаться с вами."
+    )
+
+@dp.message_handler(state=CheckoutState.name)
+async def process_name(message: types.Message, state: FSMContext):
+    name = message.text.strip()
+    if not name:
+        await message.answer("❌ Имя не может быть пустым! Введите ваше имя:")
+        return
+    if len(name) < 2:
+        await message.answer("❌ Имя слишком короткое! Введите полное имя:")
+        return
+    if len(name) > 50:
+        await message.answer("❌ Имя слишком длинное! Введите имя короче:")
+        return
+    async with state.proxy() as data:
+        data['name'] = name
+    await CheckoutState.phone.set()
+    await message.answer(
+        "📞 Введите ваш номер телефона для связи:\n\n"
+        "Формат: +7XXXXXXXXX или 8XXXXXXXXXX\n"
+        "Например: +79991234567"
+    )
+
+@dp.message_handler(state=CheckoutState.phone)
+async def process_phone(message: types.Message, state: FSMContext):
+    phone = message.text.strip()
+    
+    # Простая валидация номера
+    digits = ''.join(filter(str.isdigit, phone))
+    
+    if len(digits) < 10:
+        await message.answer(
+            "❌ Номер телефона слишком короткий!\n\n"
+            "Введите номер в формате: +7XXXXXXXXX или 8XXXXXXXXXX\n"
+            "Например: +79991234567"
+        )
+        return
+    
+    if len(digits) > 12:
+        await message.answer(
+            "❌ Номер телефона слишком длинный!\n\n"
+            "Введите номер в формате: +7XXXXXXXXX или 8XXXXXXXXXX\n"
+            "Например: +79991234567"
+        )
+        return
+    
+    # Проверка, что номер начинается с 7 или 8 (для России)
+    if digits[0] == '8':
+        digits = '7' + digits[1:]
+    elif digits[0] != '7':
+        await message.answer(
+            "❌ Номер должен начинаться с +7 или 8 (российский номер)!\n\n"
+            "Введите номер в формате: +7XXXXXXXXX или 8XXXXXXXXXX\n"
+            "Например: +79991234567"
+        )
+        return
+    
+    # Форматируем номер для отображения
+    formatted_phone = f"+7 ({digits[1:4]}) {digits[4:7]}-{digits[7:9]}-{digits[9:11]}"
+    
+    async with state.proxy() as data:
+        data['phone'] = formatted_phone
+        address = data.get('address', PICKUP_ADDRESS)
+    
     await create_order(message, state, address)
 
 async def create_order(message_or_call, state: FSMContext, address: str):
@@ -1154,6 +1257,8 @@ async def create_order(message_or_call, state: FSMContext, address: str):
     cart = user_carts.get(user_id, [])
     async with state.proxy() as data:
         delivery_method = data.get('delivery_method')
+        customer_name = data.get('name', username or 'Не указано')
+        customer_phone = data.get('phone', 'Не указан')
     if not cart:
         if isinstance(message_or_call, types.Message):
             await message_or_call.answer("❌ Корзина пуста")
@@ -1195,6 +1300,8 @@ async def create_order(message_or_call, state: FSMContext, address: str):
         'id': order_id,
         'user_id': user_id,
         'username': username,
+        'customer_name': customer_name,
+        'customer_phone': customer_phone,
         'items': order_items,
         'total': total,
         'delivery_method': delivery_method,
@@ -1236,9 +1343,10 @@ async def create_order(message_or_call, state: FSMContext, address: str):
         order_text += f"📍 Адрес: {address}\n"
     if total - DELIVERY_COST < FREE_DELIVERY_THRESHOLD:
         order_text += f"🚚 Доставка: {DELIVERY_COST} руб.\n"
-    order_text += f"👤 Покупатель: @{username or 'без username'}\n"
-    order_text += f"🆔 ID пользователя: {user_id}\n\n"
-    order_text += f"💬 Для связи с покупателем: @{username or 'не указан'}"
+    order_text += f"\n👤 Покупатель: {customer_name}\n"
+    order_text += f"📞 Телефон: {customer_phone}\n"
+    order_text += f"👤 Username: @{username or 'без username'}\n"
+    order_text += f"🆔 ID пользователя: {user_id}\n"
     admin_keyboard = get_order_confirmation_keyboard(order_id)
     await bot_obj.send_message(OWNER_ID, order_text, parse_mode="HTML", reply_markup=admin_keyboard)
     # Отправка всем админам
@@ -1259,7 +1367,9 @@ async def create_order(message_or_call, state: FSMContext, address: str):
         user_response += f"📍 Адрес доставки: {address}\n"
     if total - DELIVERY_COST < FREE_DELIVERY_THRESHOLD:
         user_response += f"🚚 Стоимость доставки: {DELIVERY_COST} руб.\n"
-    user_response += f"👤 Ваш username: @{username or 'не указан'}\n\n"
+    user_response += f"👤 Имя: {customer_name}\n"
+    user_response += f"📞 Телефон: {customer_phone}\n"
+    user_response += f"👤 Username: @{username or 'не указан'}\n\n"
     if has_exact_price_only:
         user_response += f"💰 Сумма к оплате: {total} руб.\n\n"
     else:
@@ -1267,29 +1377,31 @@ async def create_order(message_or_call, state: FSMContext, address: str):
         user_response += f"Итоговая стоимость будет рассчитана при получении\n\n"
     user_response += "📞 С вами свяжется администратор для подтверждения заказа\n\n"
     user_response += "Спасибо за заказ! 🛍️"
+    user_is_buyer = message_or_call.from_user.id in buyer_mode_users
     if isinstance(message_or_call, types.Message):
         await message_or_call.answer(
             user_response,
             parse_mode="HTML",
-            reply_markup=get_main_keyboard(is_admin=is_admin(message_or_call.from_user.id))
+            reply_markup=get_main_keyboard(is_admin=is_admin(message_or_call.from_user.id), is_buyer_mode=user_is_buyer)
         )
     else:
         await message_or_call.message.answer(
             user_response,
             parse_mode="HTML",
-            reply_markup=get_main_keyboard(is_admin=is_admin(message_or_call.from_user.id))
+            reply_markup=get_main_keyboard(is_admin=is_admin(message_or_call.from_user.id), is_buyer_mode=user_is_buyer)
         )
 
 # ==================== АДМИН ФУНКЦИИ ====================
-@dp.message_handler(text="📦 Мои заказы")
+@dp.message_handler(text="📦 Мои ��������аказы")
 async def show_user_orders(message: types.Message):
     user_id = str(message.from_user.id)
     user_orders = [order for order in orders_db.values() if order.get('user_id') == user_id]
     if not user_orders:
+        is_buyer = message.from_user.id in buyer_mode_users
         await message.answer(
             "📭 У вас пока нет заказов.\n\n"
             "Совершите покупки в нашем каталоге и оформите заказ! 🛍️",
-            reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id))
+            reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id), is_buyer_mode=is_buyer)
         )
         return
     user_orders.sort(key=lambda x: x.get('created_at', ''), reverse=True)
@@ -1309,7 +1421,8 @@ async def show_user_orders(message: types.Message):
         orders_text += "─" * 20 + "\n\n"
     if len(user_orders) > 10:
         orders_text += f"\nПоказаны последние 10 из {len(user_orders)} заказов"
-    await message.answer(orders_text, parse_mode="HTML", reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id)))
+    is_buyer = message.from_user.id in buyer_mode_users
+    await message.answer(orders_text, parse_mode="HTML", reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id), is_buyer_mode=is_buyer))
 
 @dp.message_handler(text="ℹ️ О нас")
 async def show_about(message: types.Message):
@@ -1329,7 +1442,8 @@ async def show_about(message: types.Message):
         "⏰ Работаем: ежедневно с 9:00 до 21:00\n\n"
         "💬 После оформления заказа с вами свяжется администратор для подтверждения"
     )
-    await message.answer(about_text, parse_mode="HTML", reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id)))
+    is_buyer = message.from_user.id in buyer_mode_users
+    await message.answer(about_text, parse_mode="HTML", reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id), is_buyer_mode=is_buyer))
 
 # ==================== АДМИН ФУНКЦИИ (ТОЛЬКО ДЛЯ АДМИНА) ====================
 @dp.message_handler(text="📋 Активные заказы")
@@ -1709,7 +1823,7 @@ async def manage_products(message: types.Message):
     text += "Нажмите на кнопку с товаром ниже для управления:"
     await message.answer(text, parse_mode="HTML", reply_markup=get_product_management_keyboard())
 
-@dp.callback_query_handler(lambda c: c.data.startswith('edit_'))
+@dp.callback_query_handler(lambda c: c.data.startswith('edit_') and not c.data.startswith('edit_price_') and not c.data.startswith('edit_quantity_') and not c.data.startswith('edit_photo_'))
 async def edit_product_start(call: types.CallbackQuery):
     if not is_admin(call.from_user.id):
         await call.answer("❌ Недостаточно прав", show_alert=True)
@@ -2572,12 +2686,12 @@ async def auto_delete_old_orders(days: int = 30):
                     f"🧹 <b>Автоматическое удаление данных</b>\n\n"
                     f"Удалено заказов: {deleted_count}\n"
                     f"Срок хранения: {days} дней\n"
-                    f"Персональные данные уничтожены в соответствии с 152-ФЗ.",
+                    f"Персональные данные уничтожены в ��оответствии с 152-ФЗ.",
                     parse_mode="HTML")
             except:
                 pass
     except Exception as e:
-        print(f"❌ Ошибка автоудаления: {e}")
+        print(f"❌ Ошиб��а автоудаления: {e}")
 
 async def schedule_daily_cleanup():
     """Ежедневное автоудаление в 3:00"""
