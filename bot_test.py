@@ -856,7 +856,7 @@ async def show_cart(message: types.Message):
         text += f"Итоговая стоимость будет рассчитана при получении"
     await message.answer(text, parse_mode="HTML", reply_markup=get_cart_keyboard(cart))
 
-@dp.callback_query_handler(lambda c: c.data.startswith('add_'))
+@dp.callback_query_handler(lambda c: c.data.startswith('add_') and c.data != 'add_admin')
 async def add_to_cart(call: types.CallbackQuery):
     product_id = call.data.split('_')[1]
     product = products_db.get(product_id)
