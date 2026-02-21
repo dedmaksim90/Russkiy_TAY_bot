@@ -44,13 +44,16 @@ user_last_message_time = defaultdict(float)
 user_message_count = defaultdict(int)
 BLOCKED_USERS = set()
 
-# Средние веса для мяса
+# Средние веса для мяса (в кг)
 MEAT_AVERAGE_WEIGHTS = {
     "🐓 Цыпленок бройлер": 2.5,
     "🐔 Молодой петушок": 1,
     "👑 Цесарка": 1.4,
     "🐦 Перепелка": 0.2
 }
+
+# Средний вес для колбасы (1 палочка)
+SAUSAGE_AVERAGE_WEIGHT = 0.4  # 400 грамм
 
 # Благодарственные сообщения
 THANK_YOU_MESSAGES = [
@@ -159,25 +162,33 @@ CATEGORIES = {
         "subcategories": ["🐔 Куриное", "🐦 Перепелиное", "👑 Цесариное"],
         "unit": "шт",
         "multiplier": {
-            "🐔 Куриное": 10,
-            "🐦 Перепелиное": 20,
-            "👑 Цесариное": 10
+            "🐔 Куриное": 10,  # 1 десяток
+            "🐦 Перепелиное": 20,  # 2 десятка
+            "👑 Цесариное": 10  # 1 десяток
         },
         "exact_price": True
     },
     "🍗 Мясо": {
         "name": "🍗 Мясо",
-        "subcategories": ["🐓 Цыпленок бройлер", "🐔 Молодой петушок", "👑 Цесарка", "🐦 Перепелка"],
-        "unit": "шт",
+        "subcategories": {
+            "❄️ Охлажденное": ["🐓 Цыпленок бройлер", "🐔 Молодой петушок", "👑 Цесарка", "🐦 Перепелка"],
+            "🧊 Замороженное": ["🐓 Цыпленок бройлер", "🐔 Молодой петушок", "👑 Цесарка", "🐦 Перепелка"]
+        },
+        "unit": "кг",
         "price_per_kg": True,
         "average_weight": MEAT_AVERAGE_WEIGHTS,
-        "exact_price": False
+        "exact_price": False,
+        "freeze_delay_hours": 48  # 2 суток для переноса из охлажденного в замороженное
     },
     "🥫 Полуфабрикаты": {
         "name": "🥫 Полуфабрикаты",
         "subcategories": ["🌭 Колбаса", "🥩 Тушенка"],
-        "unit": "кг",
+        "unit": "шт",
         "price_per_kg": True,
+        "average_weight": {
+            "🌭 Колбаса": SAUSAGE_AVERAGE_WEIGHT,  # 400 гр за палочку
+            "🥩 Тушенка": 0.5  # 500 гр за банку (стандарт)
+        },
         "exact_price": False
     }
 }
@@ -226,6 +237,52 @@ def load_data():
         buyer_mode_users = set(data.get('buyer_mode_users', []))
     except FileNotFoundError:
         pass
+
+# ==================== АВТОПЕРЕНОС ТОВАРОВ ИЗ ОХЛАЖДЕННОГО В ЗАМОРОЖЕННОЕ ====================
+async def check_and_freeze_meat():
+    """
+    Проверка и перенос товаров из 'Охлажденное' в 'Замороженное' через 48 часов.
+    Запускается периодически (каждые 30 минут).
+    """
+    now = datetime.now()
+    meat_category = CATEGORIES.get("🍗 Мясо")
+    if not meat_category:
+        return
+    
+    freeze_delay = meat_category.get("freeze_delay_hours", 48)
+    
+    for product_id, product in products_db.items():
+        if product.get('category') != "🍗 Мясо":
+            continue
+        if product.get('subcategory_type') != "❄️ Охлажденное":
+            continue
+        if product.get('quantity', 0) <= 0:
+            continue
+        
+        # Проверяем, когда товар был добавлен в охлажденное
+        created_at_str = product.get('created_at')
+        if not created_at_str:
+            continue
+        
+        try:
+            created_at = datetime.strptime(created_at_str, "%d.%m.%Y %H:%M")
+            hours_diff = (now - created_at).total_seconds() / 3600
+            
+            if hours_diff >= freeze_delay:
+                # Переносим в замороженное
+                product['subcategory_type'] = "🧊 Замороженное"
+                product['frozen_at'] = now.strftime("%d.%m.%Y %H:%M")
+                logging.info(f"Товар {product_id} ({product.get('subcategory')}) перенесен из охлажденного в замороженное")
+        except Exception as e:
+            logging.error(f"Ошибка при проверке заморозки товара {product_id}: {e}")
+    
+    save_data()
+
+async def start_freeze_checker():
+    """Запускает периодическую проверку заморозки"""
+    while True:
+        await asyncio.sleep(1800)  # Проверка каждые 30 минут
+        await check_and_freeze_meat()
 
 # ==================== НАСТРОЙКА БОТА ====================
 bot = Bot(token=BOT_TOKEN)
@@ -353,21 +410,93 @@ def get_admin_keyboard():
 
 def get_categories_keyboard(is_admin=False):
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    for category in CATEGORIES.keys():
-        keyboard.add(KeyboardButton(category))
+    for category_name in CATEGORIES.keys():
+        count = count_products_in_category(category_name)
+        keyboard.add(KeyboardButton(f"{category_name} ({count})"))
     if is_admin:
         keyboard.add(KeyboardButton("↩️ Назад"), KeyboardButton("👑 Панель админа"))
     else:
         keyboard.add(KeyboardButton("↩️ Назад"), KeyboardButton("🏠 В начало"))
     return keyboard
 
+def count_products_in_category(category_name: str) -> int:
+    """Подсчет товаров в категории (с учетом всех подкатегорий)"""
+    count = 0
+    category = CATEGORIES.get(category_name)
+    if not category:
+        return 0
+    
+    subcategories = category.get("subcategories", [])
+    
+    if isinstance(subcategories, dict):
+        # Для мяса: суммируем по всем подкатегориям (охлажденное + замороженное)
+        for subcat_name in subcategories.keys():
+            count += count_products_in_subcategory(category_name, subcat_name)
+    else:
+        # Для яиц и полуфабрикатов
+        for subcat in subcategories:
+            count += count_products_in_subcategory(category_name, subcat)
+    
+    return count
+
+def count_products_in_subcategory(category_name: str, subcategory_name: str) -> int:
+    """Подсчет товаров в подкатегории (с учетом наличия)"""
+    count = 0
+    category = CATEGORIES.get(category_name)
+    if not category:
+        return 0
+    
+    subcategories = category.get("subcategories", [])
+    
+    # Для мяса с вложенной структурой
+    if isinstance(subcategories, dict):
+        rubrics = subcategories.get(subcategory_name, [])
+        for product in products_db.values():
+            if (product.get('category') == category_name and 
+                product.get('subcategory_type') == subcategory_name and
+                product.get('quantity', 0) > 0):
+                count += 1
+    else:
+        # Для яиц и полуфабрикатов
+        for product in products_db.values():
+            if (product.get('category') == category_name and 
+                product.get('subcategory') == subcategory_name and
+                product.get('quantity', 0) > 0):
+                count += 1
+    
+    return count
+
+def count_products_in_rubric(category_name: str, subcategory_name: str, rubric_name: str) -> int:
+    """Подсчет товаров в конкретной рубрике внутри подкатегории"""
+    count = 0
+    for product in products_db.values():
+        if (product.get('category') == category_name and 
+            product.get('subcategory_type') == subcategory_name and
+            product.get('subcategory') == rubric_name and
+            product.get('quantity', 0) > 0):
+            count += 1
+    return count
+
 def get_subcategories_keyboard(category_name: str, is_admin=False):
     category = CATEGORIES.get(category_name)
     if not category:
         return get_categories_keyboard(is_admin)
     keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    for subcat in category["subcategories"]:
-        keyboard.add(KeyboardButton(subcat))
+    
+    subcategories = category.get("subcategories", [])
+    
+    # Проверяем, является ли subcategories словарем (для мяса с охлажденное/замороженное)
+    if isinstance(subcategories, dict):
+        # Для мяса показываем подкатегории "Охлажденное" и "Замороженное" со счетчиками
+        for subcat_name, rubrics in subcategories.items():
+            count = count_products_in_subcategory(category_name, subcat_name)
+            keyboard.add(KeyboardButton(f"{subcat_name} ({count})"))
+    else:
+        # Для яиц и полуфабрикатов показываем обычные подкатегории со счетчиками
+        for subcat in subcategories:
+            count = count_products_in_subcategory(category_name, subcat)
+            keyboard.add(KeyboardButton(f"{subcat} ({count})"))
+    
     if is_admin:
         keyboard.add(KeyboardButton("↩️ К категориям"), KeyboardButton("👑 Панель админа"))
     else:
@@ -568,13 +697,30 @@ def get_category_info(category_name: str, subcategory_name: str) -> dict:
     category = CATEGORIES.get(category_name)
     if not category:
         return {}
-    info = {
-        'unit': category.get('unit', 'шт'),
-        'multiplier': category.get('multiplier', {}).get(subcategory_name, 1),
-        'price_per_kg': category.get('price_per_kg', False),
-        'average_weight': category.get('average_weight', {}).get(subcategory_name, 0),
-        'exact_price': category.get('exact_price', False)
-    }
+    
+    subcategories = category.get("subcategories", [])
+    
+    # Для мяса с вложенными подкатегориями
+    if isinstance(subcategories, dict):
+        # Ищем рубрику во всех типах хранения
+        average_weight = category.get('average_weight', {})
+        info = {
+            'unit': category.get('unit', 'шт'),
+            'multiplier': 1,
+            'price_per_kg': category.get('price_per_kg', False),
+            'average_weight': average_weight.get(subcategory_name, 0),
+            'exact_price': category.get('exact_price', False)
+        }
+    else:
+        # Для яиц и полуфабрикатов
+        info = {
+            'unit': category.get('unit', 'шт'),
+            'multiplier': category.get('multiplier', {}).get(subcategory_name, 1),
+            'price_per_kg': category.get('price_per_kg', False),
+            'average_weight': category.get('average_weight', {}).get(subcategory_name, 0),
+            'exact_price': category.get('exact_price', False)
+        }
+    
     return info
 
 def calculate_product_price(product_data: dict, quantity: int = 1) -> Tuple[int, str]:
@@ -783,38 +929,93 @@ async def go_back(message: types.Message):
         reply_markup=get_categories_keyboard(is_admin=user_is_admin)
     )
 
-@dp.message_handler(lambda m: m.text in CATEGORIES.keys())
+@dp.message_handler(lambda m: m.text in CATEGORIES.keys() or any(m.text.startswith(cat) for cat in CATEGORIES.keys()))
 async def show_category(message: types.Message):
-    category = CATEGORIES.get(message.text)
+    # Извлекаем имя категории (убираем счетчик в скобках)
+    category_text = message.text.split(' (')[0]
+    category = CATEGORIES.get(category_text)
     if not category:
         return
     user_is_admin = is_admin(message.from_user.id)
+    
+    subcategories = category.get("subcategories", [])
+    
+    # Если это мясо с вложенными подкатегориями (охлажденное/замороженное)
+    if isinstance(subcategories, dict):
+        await message.answer(
+            f"📂 {category_text}\n\nВыберите тип хранения:",
+            parse_mode="HTML",
+            reply_markup=get_subcategories_keyboard(category_text, is_admin=user_is_admin)
+        )
+    else:
+        # Для яиц и полуфабрикатов сразу показываем рубрики
+        await message.answer(
+            f"📂 {category_text}\n\nВыберите рубрику:",
+            parse_mode="HTML",
+            reply_markup=get_subcategories_keyboard(category_text, is_admin=user_is_admin)
+        )
+
+def get_rubrics_keyboard(category_name: str, subcategory_type: str, is_admin=False):
+    """Клавиатура с рубриками внутри подкатегории (для мяса)"""
+    category = CATEGORIES.get(category_name)
+    if not category:
+        return get_subcategories_keyboard(category_name, is_admin)
+    
+    subcategories = category.get("subcategories", {})
+    rubrics = subcategories.get(subcategory_type, [])
+    
+    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    for rubric in rubrics:
+        count = count_products_in_rubric(category_name, subcategory_type, rubric)
+        keyboard.add(KeyboardButton(f"{rubric} ({count})"))
+    
+    if is_admin:
+        keyboard.add(KeyboardButton("↩️ К категориям"), KeyboardButton("👑 Панель админа"))
+    else:
+        keyboard.add(KeyboardButton("↩️ К категориям"), KeyboardButton("🏠 В начало"))
+    return keyboard
+
+@dp.message_handler(lambda m: m.text in ["❄️ Охлажденное", "🧊 Замороженное"] or m.text.startswith("❄️ Охлажденное") or m.text.startswith("🧊 Замороженное"))
+async def show_meat_subcategory(message: types.Message):
+    """Обработчик для подкатегорий мяса (охлажденное/замороженное)"""
+    # Извлекаем имя подкатегории (убираем счетчик)
+    subcategory_type = message.text.split(' (')[0]
+    
+    user_is_admin = is_admin(message.from_user.id)
+    
     await message.answer(
-        f"📂 {message.text}\n\nВыберите рубрику:",
+        f"🥩 {subcategory_type}\n\nВыберите рубрику:",
         parse_mode="HTML",
-        reply_markup=get_subcategories_keyboard(message.text, is_admin=user_is_admin)
+        reply_markup=get_rubrics_keyboard("🍗 Мясо", subcategory_type, is_admin=user_is_admin)
     )
 
-@dp.message_handler(lambda m: any(subcat in m.text for category in CATEGORIES.values() for subcat in category["subcategories"]))
+@dp.message_handler(lambda m: any(rubric in m.text for cat in CATEGORIES.values() 
+                                   for sub in (cat.get("subcategories", []) if not isinstance(cat.get("subcategories"), dict) else [])
+                                   for rubric in (sub if isinstance(sub, list) else [])) or 
+                          any(rubric in m.text for rubric in ["🐓 Цыпленок бройлер", "🐔 Молодой петушок", "👑 Цесарка", "🐦 Перепелка", "🐔 Куриное", "🐦 Перепелиное", "👑 Цесариное", "🌭 Колбаса", "🥩 Тушенка"]))
 async def show_products(message: types.Message):
     try:
-        subcategory_text = message.text
+        # Извлекаем имя рубрики (убираем счетчик в скобках)
+        rubric_text = message.text.split(' (')[0]
+        
         product = None
         for prod in products_db.values():
-            if prod.get('subcategory') == subcategory_text:
+            if prod.get('subcategory') == rubric_text:
                 product = prod
                 break
+        
         if not product:
             user_is_admin = is_admin(message.from_user.id)
             if user_is_admin:
                 await message.answer(
-                    f"📭 В рубрике '{subcategory_text}' пока нет товаров.\n\n"
+                    f"📭 В рубрике '{rubric_text}' пока нет товаров.\n\n"
                     f"Хотите добавить товар? Используйте кнопку '➕ Добавить товар' в панели админа.",
                     reply_markup=get_admin_keyboard()
                 )
             else:
-                await message.answer(f"📭 В рубрике '{subcategory_text}' пока нет товаров.")
+                await message.answer(f"📭 В рубрике '{rubric_text}' пока нет товаров.")
             return
+        
         caption = format_product_info(product)
         user_is_admin = is_admin(message.from_user.id)
         if user_is_admin:
@@ -1611,17 +1812,44 @@ async def process_subcategory_state(message: types.Message, state: FSMContext):
         await AddProduct.category.set()
         await message.answer("↩️ Выберите категорию:", reply_markup=get_categories_keyboard(is_admin=True))
         return
+    
     async with state.proxy() as data:
-        data['subcategory'] = message.text
         category = data['category']
-        subcategory = data['subcategory']
+        category_data = CATEGORIES.get(category)
+        
+        # Проверяем, есть ли вложенные подкатегории (для мяса)
+        subcategories = category_data.get("subcategories", [])
+        if isinstance(subcategories, dict):
+            # Для мяса: сначала выбираем тип хранения (охлажденное/замороженное)
+            if message.text in subcategories:
+                data['subcategory_type'] = message.text  # "❄️ Охлажденное" или "🧊 Замороженное"
+                # Показываем рубрики внутри этого типа
+                await message.answer("🥩 Выберите рубрику:", reply_markup=get_rubrics_keyboard(category, message.text, is_admin=True))
+                return
+            elif data.get('subcategory_type'):
+                # Уже выбран тип хранения, теперь выбираем рубрику
+                data['subcategory'] = message.text
+            else:
+                await message.answer("❌ Сначала выберите тип хранения!")
+                return
+        else:
+            # Для яиц и полуфабрикатов
+            data['subcategory'] = message.text
+        
+        subcategory = data.get('subcategory')
+        subcategory_type = data.get('subcategory_type')
+        
+        # Проверяем существование товара
         existing_products = [p for p in products_db.values()
-                             if p.get('category') == category and p.get('subcategory') == subcategory]
+                             if p.get('category') == category and 
+                             p.get('subcategory') == subcategory and
+                             (not subcategory_type or p.get('subcategory_type') == subcategory_type)]
         if existing_products:
             await message.answer(f"❌ В рубрике '{subcategory}' уже есть товар. Можно добавить только один товар в рубрику.")
             await state.finish()
             await message.answer("↩️ Возвращаемся...", reply_markup=get_admin_keyboard())
             return
+    
     await AddProduct.next()
     category_info = get_category_info(category, subcategory)
     if category_info.get('price_per_kg'):
@@ -1665,16 +1893,26 @@ async def process_photo_state(message: types.Message, state: FSMContext):
         return
     async with state.proxy() as data:
         product_id = str(uuid.uuid4())[:8]
-        products_db[product_id] = {
+        category = data['category']
+        subcategory = data['subcategory']
+        subcategory_type = data.get('subcategory_type')  # Только для мяса
+        
+        product_data = {
             'id': product_id,
-            'category': data['category'],
-            'subcategory': data['subcategory'],
+            'category': category,
+            'subcategory': subcategory,
             'price': data['price'],
             'quantity': data['quantity'],
             'photo': message.photo[-1].file_id,
             'published': False,
             'created_at': datetime.now().strftime("%d.%m.%Y %H:%M")
         }
+        
+        # Для мяса добавляем тип хранения
+        if subcategory_type:
+            product_data['subcategory_type'] = subcategory_type
+        
+        products_db[product_id] = product_data
         save_data()
     await message.answer_photo(
         message.photo[-1].file_id,
@@ -2826,6 +3064,11 @@ async def on_startup(dp):
     await auto_delete_old_orders(days=30)
     asyncio.create_task(schedule_daily_cleanup())
     # =============================================
+
+    # ===== ЗАПУСК ПРОВЕРКИ ЗАМОРОЗКИ МЯСА =====
+    asyncio.create_task(start_freeze_checker())
+    print("⏰ Запущена проверка заморозки мяса (48 часов)")
+    # ==========================================
 
     print("=" * 50)
     print("🤖 БОТ СЕМЕЙНОЙ ФЕРМЫ РУССКИЙ ТАЙ")
