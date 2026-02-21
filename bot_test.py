@@ -2006,8 +2006,13 @@ async def add_admin_start(call: types.CallbackQuery, state: FSMContext):
 @dp.message_handler(state=AddAdminState.action)
 async def process_add_admin(message: types.Message, state: FSMContext):
     if not is_owner(message.from_user.id):
+        await message.answer("❌ Только владелец может добавлять администраторов!")
         await state.finish()
         return
+    
+    # Завершаем все другие состояния перед добавлением админа
+    await state.finish()
+    
     try:
         new_admin_id = int(message.text.strip())
         if new_admin_id == OWNER_ID:
@@ -2759,5 +2764,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print("\n🛑 Бот остановлен")
     except Exception as e:
-
         print(f"❌ Ошибка: {e}")
