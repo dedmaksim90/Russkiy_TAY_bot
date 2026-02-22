@@ -224,10 +224,50 @@ def connect_to_mongodb():
     """Отключено для локального тестирования"""
     return False
 
-# ==================== ФУНКЦИИ ДЛЯ MONGODB ====================
+# ==================== ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ ДАННЫХ ====================
+DATA_FILE = 'shop_data.json'
+
 def save_data():
-    """Сохранение данных (для MongoDB не нужно)"""
-    pass
+    """Сохранение данных в JSON файл"""
+    import json
+    data = {
+        'products': dict(products_db) if isinstance(products_db, dict) else [],
+        'individual_products': dict(individual_products_db) if isinstance(individual_products_db, dict) else [],
+        'orders': dict(orders_db) if isinstance(orders_db, dict) else [],
+        'carts': dict(user_carts) if isinstance(user_carts, dict) else [],
+        'admins': list(admins_db),
+        'buyer_mode_users': list(buyer_mode_users),
+        'reviews': dict(reviews_db) if isinstance(reviews_db, dict) else []
+    }
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+    except Exception as e:
+        logging.error(f"❌ Ошибка сохранения: {e}")
+
+def load_data():
+    """Загрузка данных из JSON файла"""
+    global admins_db, buyer_mode_users
+    import json
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            products_db.clear()
+            products_db.update(data.get('products', {}))
+            individual_products_db.clear()
+            individual_products_db.update(data.get('individual_products', {}))
+            orders_db.clear()
+            orders_db.update(data.get('orders', {}))
+            user_carts.clear()
+            user_carts.update(data.get('carts', {}))
+            reviews_db.clear()
+            reviews_db.update(data.get('reviews', {}))
+            admins_db = set(data.get('admins', []))
+            buyer_mode_users = set(data.get('buyer_mode_users', []))
+            logging.info(f"📂 Данные загружены из {DATA_FILE}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка загрузки: {e}")
 
 def get_product(product_id: str):
     """Получить товар по ID"""
@@ -1340,7 +1380,7 @@ async def show_cart(message: types.Message):
         text += f"\n💰 Итого к оплате: {total:.0f} руб."
     else:
         text += f"\n💰 Примерная сумма: ~{total:.0f} руб.\n"
-        text += f"Итоговая стоимость будет рассчитана при получении"
+        text += f"Итог����вая стоимость будет рассчитана при получении"
     await message.answer(text, parse_mode="HTML", reply_markup=get_cart_keyboard(cart))
 
 @dp.callback_query_handler(lambda c: c.data.startswith('add_') and c.data != 'add_admin')
@@ -3674,24 +3714,15 @@ async def on_startup(dp):
     print("=" * 50)
     print("🤖 БОТ СЕМЕЙНОЙ ФЕРМЫ РУССКИЙ ТАЙ")
     print("=" * 50)
-    
-    # ===== ПОДКЛЮЧЕНИЕ К MONGODB =====
-    print("🔌 Подключение к MongoDB...")
-    
-    # Проверяем, есть ли переменная окружения
-    if not MONGODB_URI or 'YourPassword' in MONGODB_URI:
-        print("⚠️ MONGODB_URI не настроен! Используем локальный режим...")
-        print("   Для облачной базы настройте переменную MONGODB_URI на Bothost")
-        print("   Инструкция в файле .env.example")
-    else:
-        if connect_to_mongodb():
-            print("✅ MongoDB подключена!")
-            load_data()
-        else:
-            print("⚠️ Не удалось подключиться к MongoDB. Работаем без базы данных.")
-            print("   Проверьте MONGODB_URI в переменных окружения Bothost")
+
+    # ===== ЗАГРУЗКА ДАННЫХ ИЗ JSON =====
+    print("📂 Загрузка данных...")
+    load_data()
+    print(f"✅ Загружено товаров: {len(products_db)}")
+    print(f"✅ Загружено заказов: {len(orders_db)}")
+    print(f"✅ Администраторов: {len(admins_db)}")
     # ==================================
-    
+
     # ===== ПРИНУДИТЕЛЬНЫЙ СБРОС ВЕБХУКА =====
     print("\n🔄 Сбрасываем вебхук и очищаем обновления...")
     try:
