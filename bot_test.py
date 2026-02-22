@@ -199,90 +199,30 @@ CATEGORIES = {
 }
 
 # ==================== ПОДКЛЮЧЕНИЕ К MONGODB ====================
-# Подключение к MongoDB
-MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb+srv://bot_admin:YourPassword@cluster0.xxxxx.mongodb.net/')
+# Отключено для локального тестирования
+MONGODB_URI = ''
 DB_NAME = 'telegram_bot'
 
-# Глобальные переменные
 db = None
 mongo_client = None
-products_db = None
-individual_products_db = None
-orders_db = None
-user_carts = None
-notifications_db = None
-product_views_db = None
-order_return_items_db = None
-manual_add_requests_db = None
-user_stats_db = None
-reviews_db = None
+products_db = {}
+individual_products_db = {}
+orders_db = {}
+user_carts = {}
+notifications_db = {}
+product_views_db = {}
+order_return_items_db = {}
+manual_add_requests_db = {}
+user_stats_db = {}
+reviews_db = {}
 admins_collection = None
 buyer_mode_collection = None
 admins_db = set()
 buyer_mode_users = set()
 
 def connect_to_mongodb():
-    """Подключение к MongoDB"""
-    global db, mongo_client, products_db, individual_products_db, orders_db
-    global user_carts, notifications_db, product_views_db, order_return_items_db
-    global manual_add_requests_db, user_stats_db, reviews_db
-    global admins_collection, buyer_mode_collection, admins_db, buyer_mode_users
-    
-    try:
-        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-        # Проверка подключения
-        mongo_client.admin.command('ping')
-        db = mongo_client[DB_NAME]
-        
-        # Инициализация коллекций
-        products_db = db['products']
-        individual_products_db = db['individual_products']
-        orders_db = db['orders']
-        user_carts = db['user_carts']
-        notifications_db = db['notifications']
-        product_views_db = db['product_views']
-        order_return_items_db = db['order_return_items']
-        manual_add_requests_db = db['manual_add_requests']
-        user_stats_db = db['user_stats']
-        reviews_db = db['reviews']
-        admins_collection = db['admins']
-        buyer_mode_collection = db['buyer_mode_users']
-        
-        # Создаём индексы для ускорения поиска
-        try:
-            products_db.create_index('id', unique=True)
-            individual_products_db.create_index('id', unique=True)
-            orders_db.create_index('id', unique=True)
-            orders_db.create_index('user_id')
-            admins_collection.create_index('user_id', unique=True)
-            buyer_mode_collection.create_index('user_id', unique=True)
-        except:
-            pass
-        
-        # Загружаем админов в кэш
-        admins_db = set()
-        for admin in admins_collection.find():
-            admins_db.add(admin['user_id'])
-        
-        buyer_mode_users = set()
-        for user in buyer_mode_collection.find():
-            buyer_mode_users.add(user['user_id'])
-        
-        return True
-    except Exception as e:
-        logging.error(f"❌ Ошибка подключения к MongoDB: {e}")
-        # Инициализируем пустые коллекции для работы без MongoDB
-        products_db = {}
-        individual_products_db = {}
-        orders_db = {}
-        user_carts = {}
-        notifications_db = {}
-        product_views_db = {}
-        order_return_items_db = {}
-        manual_add_requests_db = {}
-        user_stats_db = {}
-        reviews_db = {}
-        return False
+    """Отключено для локального тестирования"""
+    return False
 
 # ==================== ФУНКЦИИ ДЛЯ MONGODB ====================
 def save_data():
@@ -3827,7 +3767,16 @@ async def on_startup(dp):
 
 if __name__ == '__main__':
     from aiogram import executor
+    import asyncio
+    
     print("🚀 Запуск бота...")
+    
+    # Создаём event loop для Python 3.14
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    except Exception:
+        pass
 
     try:
         executor.start_polling(
