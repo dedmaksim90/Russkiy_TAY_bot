@@ -6,7 +6,6 @@ import uuid
 import random
 import time
 import hashlib
-from pymongo import MongoClient
 from collections import defaultdict
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Any, Optional, Tuple
@@ -20,10 +19,6 @@ from aiogram.types import (
 )
 from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.dispatcher.handler import CancelHandler
-from dotenv import load_dotenv
-
-# Загружаем переменные окружения из файла .env
-load_dotenv()
 
 # ==================== БЕЗОПАСНОСТЬ ====================
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -198,13 +193,7 @@ CATEGORIES = {
     }
 }
 
-# ==================== ПОДКЛЮЧЕНИЕ К MONGODB ====================
-# Отключено для локального тестирования
-MONGODB_URI = ''
-DB_NAME = 'telegram_bot'
-
-db = None
-mongo_client = None
+# ==================== БАЗА ДАННЫХ ====================
 products_db = {}
 individual_products_db = {}
 orders_db = {}
@@ -215,29 +204,27 @@ order_return_items_db = {}
 manual_add_requests_db = {}
 user_stats_db = {}
 reviews_db = {}
-admins_collection = None
-buyer_mode_collection = None
 admins_db = set()
 buyer_mode_users = set()
-
-def connect_to_mongodb():
-    """Отключено для локального тестирования"""
-    return False
 
 # ==================== ФУНКЦИИ ДЛЯ СОХРАНЕНИЯ ДАННЫХ ====================
 DATA_FILE = 'shop_data.json'
 
 def save_data():
     """Сохранение данных в JSON файл"""
-    import json
     data = {
-        'products': dict(products_db) if isinstance(products_db, dict) else [],
-        'individual_products': dict(individual_products_db) if isinstance(individual_products_db, dict) else [],
-        'orders': dict(orders_db) if isinstance(orders_db, dict) else [],
-        'carts': dict(user_carts) if isinstance(user_carts, dict) else [],
+        'products': products_db,
+        'individual_products': individual_products_db,
+        'orders': orders_db,
+        'carts': user_carts,
+        'notifications': notifications_db,
+        'product_views': product_views_db,
+        'order_return_items': order_return_items_db,
+        'manual_add_requests': manual_add_requests_db,
+        'user_stats': user_stats_db,
+        'reviews': reviews_db,
         'admins': list(admins_db),
-        'buyer_mode_users': list(buyer_mode_users),
-        'reviews': dict(reviews_db) if isinstance(reviews_db, dict) else []
+        'buyer_mode_users': list(buyer_mode_users)
     }
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
@@ -247,56 +234,31 @@ def save_data():
 
 def load_data():
     """Загрузка данных из JSON файла"""
+    global products_db, orders_db, user_carts, notifications_db, product_views_db
+    global order_return_items_db, manual_add_requests_db, user_stats_db, reviews_db
     global admins_db, buyer_mode_users
-    import json
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            products_db.clear()
-            products_db.update(data.get('products', {}))
-            individual_products_db.clear()
-            individual_products_db.update(data.get('individual_products', {}))
-            orders_db.clear()
-            orders_db.update(data.get('orders', {}))
-            user_carts.clear()
-            user_carts.update(data.get('carts', {}))
-            reviews_db.clear()
-            reviews_db.update(data.get('reviews', {}))
+            products_db = data.get('products', {})
+            individual_products_db = data.get('individual_products', {})
+            orders_db = data.get('orders', {})
+            user_carts = data.get('carts', {})
+            notifications_db = data.get('notifications', {})
+            product_views_db = data.get('product_views', {})
+            order_return_items_db = data.get('order_return_items', {})
+            manual_add_requests_db = data.get('manual_add_requests', {})
+            user_stats_db = data.get('user_stats', {})
+            reviews_db = data.get('reviews', {})
             admins_db = set(data.get('admins', []))
             buyer_mode_users = set(data.get('buyer_mode_users', []))
             logging.info(f"📂 Данные загружены из {DATA_FILE}")
+            logging.info(f"   • Товаров: {len(products_db)}")
+            logging.info(f"   • Заказов: {len(orders_db)}")
+            logging.info(f"   • Администраторов: {len(admins_db)}")
     except Exception as e:
         logging.error(f"❌ Ошибка загрузки: {e}")
-
-def get_product(product_id: str):
-    """Получить товар по ID"""
-    if products_db is None:
-        return None
-    if isinstance(products_db, dict):
-        return products_db.get(product_id)
-    return products_db.find_one({'id': product_id})
-
-def get_all_products():
-    """Получить все товары"""
-    if products_db is None:
-        return []
-    if isinstance(products_db, dict):
-        return list(products_db.values())
-    return list(products_db.find())
-
-def add_product(product_data: dict):
-    """Добавить товар"""
-    if products_db is None:
-        return False
-    if isinstance(products_db, dict):
-        products_db[product_data['id']] = product_data
-        return True
-    try:
-        products_db.insert_one(product_data)
-        return True
-    except:
-        return False
 
 def update_product(product_id: str, update_data: dict):
     """Обновить товар"""
