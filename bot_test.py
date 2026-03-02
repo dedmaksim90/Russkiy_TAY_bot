@@ -262,179 +262,80 @@ def load_data():
 
 def update_product(product_id: str, update_data: dict):
     """Обновить товар"""
-    if products_db is None:
-        return False
-    if isinstance(products_db, dict):
-        if product_id in products_db:
-            products_db[product_id].update(update_data)
-            return True
-        return False
-    try:
-        products_db.update_one({'id': product_id}, {'$set': update_data})
+    if product_id in products_db:
+        products_db[product_id].update(update_data)
         return True
-    except:
-        return False
+    return False
 
 def delete_product(product_id: str):
     """Удалить товар"""
-    if products_db is None:
-        return False
-    if isinstance(products_db, dict):
-        if product_id in products_db:
-            del products_db[product_id]
-            return True
-        return False
-    try:
-        products_db.delete_one({'id': product_id})
+    if product_id in products_db:
+        del products_db[product_id]
         return True
-    except:
-        return False
+    return False
 
 def add_individual_product(product_data: dict):
     """Добавить индивидуальную тушку"""
-    if individual_products_db is None:
-        return False
-    if isinstance(individual_products_db, dict):
-        individual_products_db[product_data['id']] = product_data
-        return True
-    try:
-        individual_products_db.insert_one(product_data)
-        return True
-    except:
-        return False
+    individual_products_db[product_data['id']] = product_data
+    return True
 
 def update_individual_product(product_id: str, update_data: dict):
     """Обновить индивидуальную тушку"""
-    if individual_products_db is None:
-        return False
-    if isinstance(individual_products_db, dict):
-        if product_id in individual_products_db:
-            individual_products_db[product_id].update(update_data)
-            return True
-        return False
-    try:
-        individual_products_db.update_one({'id': product_id}, {'$set': update_data})
+    if product_id in individual_products_db:
+        individual_products_db[product_id].update(update_data)
         return True
-    except:
-        return False
+    return False
 
 def add_order(order_data: dict):
     """Добавить заказ"""
-    if orders_db is None:
-        return False
-    if isinstance(orders_db, dict):
-        orders_db[order_data['id']] = order_data
-        return True
-    try:
-        orders_db.insert_one(order_data)
-        return True
-    except:
-        return False
+    orders_db[order_data['id']] = order_data
+    return True
 
 def update_order(order_id: str, update_data: dict):
     """Обновить заказ"""
-    if orders_db is None:
-        return False
-    if isinstance(orders_db, dict):
-        if order_id in orders_db:
-            orders_db[order_id].update(update_data)
-            return True
-        return False
-    try:
-        orders_db.update_one({'id': order_id}, {'$set': update_data})
+    if order_id in orders_db:
+        orders_db[order_id].update(update_data)
         return True
-    except:
-        return False
+    return False
 
 def add_admin(user_id: int):
     """Добавить админа"""
-    if admins_collection is None:
-        admins_db.add(user_id)
-        return True
-    if isinstance(admins_collection, dict):
-        admins_db.add(user_id)
-        return True
-    try:
-        admins_collection.insert_one({'user_id': user_id})
-        admins_db.add(user_id)
-        return True
-    except:
-        return False
+    admins_db.add(user_id)
+    return True
 
 def remove_admin(user_id: int):
     """Удалить админа"""
-    if admins_collection is None:
-        admins_db.discard(user_id)
-        return True
-    if isinstance(admins_collection, dict):
-        admins_db.discard(user_id)
-        return True
-    try:
-        admins_collection.delete_one({'user_id': user_id})
-        admins_db.discard(user_id)
-        return True
-    except:
-        return False
+    admins_db.discard(user_id)
+    return True
 
 def add_buyer_mode_user(user_id: int):
     """Добавить в режим покупателя"""
-    if buyer_mode_collection is None:
-        buyer_mode_users.add(user_id)
-        return True
-    if isinstance(buyer_mode_collection, dict):
-        buyer_mode_users.add(user_id)
-        return True
-    try:
-        buyer_mode_collection.insert_one({'user_id': user_id})
-        buyer_mode_users.add(user_id)
-        return True
-    except:
-        return False
+    buyer_mode_users.add(user_id)
+    return True
 
 def remove_buyer_mode_user(user_id: int):
     """Удалить из режима покупателя"""
-    if buyer_mode_collection is None:
-        buyer_mode_users.discard(user_id)
-        return True
-    if isinstance(buyer_mode_collection, dict):
-        buyer_mode_users.discard(user_id)
-        return True
-    try:
-        buyer_mode_collection.delete_one({'user_id': user_id})
-        buyer_mode_users.discard(user_id)
-        return True
-    except:
-        return False
+    buyer_mode_users.discard(user_id)
+    return True
 
 def add_review(product_id: str, review_data: dict):
     """Добавить отзыв"""
-    if reviews_db is None:
-        return False
-    if isinstance(reviews_db, dict):
-        if product_id not in reviews_db:
-            reviews_db[product_id] = []
-        reviews_db[product_id].append(review_data)
-        return True
-    try:
-        reviews_db.update_one(
-            {'product_id': product_id},
-            {'$push': {'reviews': review_data}},
-            upsert=True
-        )
-        return True
-    except:
-        return False
+    if product_id not in reviews_db:
+        reviews_db[product_id] = []
+    reviews_db[product_id].append(review_data)
+    return True
 
 def get_reviews(product_id: str):
     """Получить отзывы"""
-    if reviews_db is None:
+    if product_id not in reviews_db:
         return []
-    if isinstance(reviews_db, dict):
-        return reviews_db.get(product_id, [])
-    review_doc = reviews_db.find_one({'product_id': product_id})
-    return review_doc.get('reviews', []) if review_doc else []
+    return reviews_db[product_id]
 
 # ==================== АВТОПЕРЕНОС ТОВАРОВ ИЗ ОХЛАЖДЕННОГО В ЗАМОРОЖЕННОЕ ====================
+def get_all_products():
+    """Вернуть все товары"""
+    return list(products_db.values())
+
 async def check_and_freeze_meat():
     """
     Проверка и перенос товаров из 'Охлажденное' в 'Замороженное' через 48 часов.
@@ -1421,7 +1322,7 @@ async def manual_add_to_cart_start(call: types.CallbackQuery, state: FSMContext)
     await call.message.answer(
         f"📝 Ручное добавление в корзину\n\n"
         f"{product.get('subcategory', '')}\n"
-        f"📦 Доступно: {product.get('quantity', 0)} {category_info.get('unit', 'шт')}\n"
+        f"📦 ��оступно: {product.get('quantity', 0)} {category_info.get('unit', 'шт')}\n"
         f"📦 Сейчас в корзине: {current_quantity}\n\n"
         f"Введите количество для добавления в корзину:",
         parse_mode="HTML"
@@ -2663,7 +2564,7 @@ async def delete_product_confirm(call: types.CallbackQuery):
         if in_active_orders:
             break
     if in_active_orders:
-        await call.answer("❌ Нельзя удалить товар, который есть в активных заказах!", show_alert=True)
+        await call.answer("❌ Нельзя удалить товар, который есть в активны�� заказах!", show_alert=True)
         return
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
@@ -2718,11 +2619,11 @@ async def delete_product_no(call: types.CallbackQuery):
         return
     await call.message.answer(
         f"✅ Удаление отменено\n\n"
-        f"Товар {product.get('subcategory', '')} не был удален.",
+        f"Товар {product.get('subcategory', '')} не был удал��н.",
         parse_mode="HTML",
         reply_markup=get_admin_keyboard()
     )
-    await call.answer("❌ Удаление отменено", show_alert=True)
+    await call.answer("❌ ��даление отменено", show_alert=True)
 
 @dp.callback_query_handler(lambda c: c.data == "back_to_product_management")
 async def back_to_product_management(call: types.CallbackQuery):
@@ -3734,10 +3635,7 @@ async def on_startup(dp):
     print("   • Санитизация логов (user_id скрыты)")
     print("   • Автоудаление персональных данных (152-ФЗ)")
     print("   • Система управления администраторами")
-    if db is not None:
-        print("   • MongoDB Atlas (облачная база)")
-    else:
-        print("   • Локальный режим (без MongoDB)")
+    print("   • Локальное хранение данных (JSON)")
     print("=" * 50)
 
     try:
