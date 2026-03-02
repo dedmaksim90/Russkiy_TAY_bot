@@ -478,6 +478,7 @@ def get_main_keyboard(is_admin=False, is_buyer_mode=False):
         KeyboardButton("🛍️ Каталог"),
         KeyboardButton("🛒 Корзина"),
         KeyboardButton("📦 Мои заказы"),
+        KeyboardButton("📖 Отзывы"),
         KeyboardButton("ℹ️ О нас")
     ]
     for i in range(0, len(buttons), 2):
@@ -638,7 +639,7 @@ def get_product_keyboard(product_id: str, product_data: dict, is_admin: bool = F
             keyboard.add(
                 InlineKeyboardButton("🔔 Уведомить о появлении", callback_data=f"notify_{product_id}")
             )
-        # Кнопки отзывов для всех товаров
+        # Кнопки отзывов для всех товаров (всегда показываются)
         keyboard.add(
             InlineKeyboardButton("✍️ Оставить отзыв", callback_data=f"write_review_{product_id}"),
             InlineKeyboardButton("📖 Читать отзывы", callback_data=f"read_reviews_{product_id}")
@@ -852,6 +853,12 @@ def get_back_to_reviews_keyboard(product_id: str):
     """Клавиатура возврата к отзывам"""
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(InlineKeyboardButton("🔙 Назад к отзывам", callback_data=f"read_reviews_{product_id}"))
+    return keyboard
+
+def get_all_reviews_keyboard():
+    """Клавиатура для просмотра всех отзывов"""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(InlineKeyboardButton("🏠 В начало", callback_data="go_home"))
     return keyboard
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
@@ -1835,6 +1842,63 @@ async def show_about(message: types.Message):
     is_buyer = message.from_user.id in buyer_mode_users
     await message.answer(about_text, parse_mode="HTML", reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id), is_buyer_mode=is_buyer))
 
+@dp.message_handler(text="📖 Отзывы")
+async def show_all_reviews(message: types.Message):
+    """Показать все отзывы со всех товаров"""
+    all_reviews = []
+    
+    # Собираем все отзывы из всех товаров
+    for product_id, reviews in reviews_db.items():
+        product = products_db.get(product_id)
+        if product:
+            product_name = product.get('subcategory', 'Неизвестный товар')
+            for review in reviews:
+                all_reviews.append({
+                    'product_id': product_id,
+                    'product_name': product_name,
+                    'review': review
+                })
+    
+    if not all_reviews:
+        is_buyer = message.from_user.id in buyer_mode_users
+        await message.answer(
+            "📖 Отзывы о товарах\n\n"
+            "📭 Пока нет отзывов. Будьте первым!\n\n"
+            "Оставьте отзыв о понравившемся товаре в карточке товара.",
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id), is_buyer_mode=is_buyer)
+        )
+        return
+    
+    # Сортируем по дате (новые сверху)
+    all_reviews.sort(key=lambda x: x['review'].get('date', ''), reverse=True)
+    
+    # Считаем общий средний рейтинг
+    total_rating = sum(r['review']['rating'] for r in all_reviews)
+    avg_rating = total_rating / len(all_reviews) if all_reviews else 0
+    
+    reviews_text = f"📖 Все отзывы о товарах\n\n"
+    reviews_text += f"⭐️ Средний рейтинг: {avg_rating:.1f} из 5 ({len(all_reviews)} отзывов)\n\n"
+    reviews_text += "─" * 30 + "\n\n"
+    
+    # Показываем последние 20 отзывов
+    for item in all_reviews[-20:][::-1]:
+        review = item['review']
+        stars = '⭐️' * review['rating']
+        reviews_text += f"{stars} ({review['rating']}/5)\n"
+        reviews_text += f"📦 {item['product_name']}\n"
+        reviews_text += f"👤 @{review['username']}, {review['date']}\n"
+        if review.get('text'):
+            reviews_text += f"💬 {review['text']}\n"
+        reviews_text += "\n" + "─" * 20 + "\n\n"
+    
+    is_buyer = message.from_user.id in buyer_mode_users
+    await message.answer(
+        reviews_text,
+        parse_mode="HTML",
+        reply_markup=get_main_keyboard(is_admin=is_admin(message.from_user.id), is_buyer_mode=is_buyer)
+    )
+
 # ==================== АДМИН ФУНКЦИИ (ТОЛЬКО ДЛЯ АДМИНА) ====================
 @dp.message_handler(text="📋 Активные заказы")
 async def show_active_orders(message: types.Message):
@@ -2618,7 +2682,7 @@ async def delete_product_no(call: types.CallbackQuery):
         await call.answer("❌ Товар не найден", show_alert=True)
         return
     await call.message.answer(
-        f"✅ Удаление отменено\n\n"
+        f"✅ Удаление отменен��\n\n"
         f"Товар {product.get('subcategory', '')} не был удал��н.",
         parse_mode="HTML",
         reply_markup=get_admin_keyboard()
